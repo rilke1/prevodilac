@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -34,14 +34,17 @@ def split(text, limit=2200):
     if text: result.append(text)
     return result
 
-def translate(text, model, source):
+def translate(text, model, source, runtime=None):
     name,code=source
     prompt=(f'You are a professional {name} ({code}) to Serbian Latin (sr-Latn) translator. '
         f'Your goal is to accurately convey the meaning and nuances of the original {name} text while adhering to Serbian grammar, vocabulary, and cultural sensitivities. '
         'Preserve all claims, names, numbers, and paragraph breaks. Do not summarize or omit content. '
         f'Produce only the Serbian Latin translation, without any additional explanations or commentary. Please translate the following {name} text into Serbian Latin:\n\n\n'+text)
+    options={'temperature':0,'num_ctx':8192,'num_predict':4096}
+    if runtime and runtime['device']=='CPU':options.update(num_gpu=0,num_thread=2,num_batch=64)
+    else:options.update(num_gpu=-1,num_batch=128 if runtime and runtime['percent']<100 else 512)
     body=json.dumps({'model':model,'messages':[{'role':'user','content':prompt}], 'stream':False,
-        'keep_alive':'10m','options':{'temperature':0,'num_ctx':8192,'num_predict':4096}}).encode()
+        'keep_alive':'10m','options':options}).encode()
     req=urllib.request.Request('http://127.0.0.1:11434/api/chat',data=body,headers={'Content-Type':'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=600) as r: data=json.load(r)
@@ -57,7 +60,7 @@ def translate(text, model, source):
 class Paused(Exception): pass
 class Book:
     def __init__(self,path,model,source,root=BASE):
-        self.path=Path(path); self.model=model; self.source=source
+        self.path=Path(path); self.model=model; self.source=source; self.runtime=None; self.last_device=None
         digest=hashlib.sha256(self.path.read_bytes()).hexdigest()
         self.job=root/'projekti'/hashlib.sha256((digest+model+str(source)+CACHE_VERSION).encode()).hexdigest()[:24]
         self.job.mkdir(parents=True,exist_ok=True)
@@ -105,9 +108,17 @@ class Book:
                 if row: value=row[0]
                 else:
                     lead=part[:len(part)-len(part.lstrip())]; trail=part[len(part.rstrip()):]
-                    value=lead+translate(part.strip(),self.model,self.source)+trail
+                    cfg=self.runtime.snapshot() if self.runtime else None
+                    if cfg:
+                        if (self.last_device is None and cfg['device']=='CPU') or (self.last_device is not None and self.last_device!=cfg['device']):
+                            unload_model(self.model)
+                        self.last_device=cfg['device']
+                    tick=time.monotonic()
+                    value=lead+(translate(part.strip(),self.model,self.source,cfg) if cfg else translate(part.strip(),self.model,self.source))+trail
+                    active_seconds=time.monotonic()-tick
                     self.db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)',(key,value)); self.db.commit()
                     if len(value)<len(part)*.4: self.warnings.append(f'Proveri mogući kratak prevod: {name}: {part[:100]}')
+                    if self.runtime:self.runtime.rest(active_seconds,stop,device=cfg['device'])
                 translated.append(value); done+=1
                 notify(done,self.total,name,part,value,time.monotonic()-started)
             setattr(el,attr,''.join(translated))
@@ -246,6 +257,36 @@ def prepare_book(path,source,stop,notify,root=BASE):
     return out
 
 
+class RuntimeControl:
+    """Duty-cycle pacing, not a hardware utilization cap. Safe to change from UI."""
+    def __init__(self,path=BASE/'performance.json'):
+        self.path=Path(path);self.lock=threading.RLock()
+        cfg=json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+        self.percent=max(10,min(100,int(cfg.get('percent',100))))
+        self.device='CPU' if cfg.get('device')=='CPU' else 'GPU'
+    def snapshot(self):
+        with self.lock:return {'percent':self.percent,'device':self.device}
+    def set(self,percent,device):
+        with self.lock:
+            self.percent=max(10,min(100,int(percent)));self.device='CPU' if device=='CPU' else 'GPU'
+            atomic_json(self.path,self.snapshot())
+    def rest(self,active_seconds,stop,clock=time.monotonic,device=None):
+        start=clock()
+        while True:
+            cfg=self.snapshot()
+            if device is not None and cfg['device']!=device:return
+            percent=cfg['percent']
+            target=active_seconds*(100/percent-1)
+            remaining=target-(clock()-start)
+            if remaining<=0:return
+            if stop.wait(min(.2,remaining)):raise Paused()
+
+def unload_model(model):
+    payload=json.dumps({'model':model,'prompt':'','keep_alive':0,'stream':False}).encode()
+    req=urllib.request.Request('http://127.0.0.1:11434/api/generate',data=payload,headers={'Content-Type':'application/json'})
+    with urllib.request.urlopen(req,timeout=60) as r:json.load(r)
+
+
 class QueueStore:
     def __init__(self,path=BASE/'red.json'):
         self.path=Path(path);self.lock=threading.RLock();self.items=[]
@@ -281,7 +322,7 @@ class QueueStore:
         return count
     def remove(self,ids):
         with self.lock:self.items=[i for i in self.items if i['id'] not in ids];self.save()
-    def run(self,stop,emit,book_factory=Book,prepare=prepare_book):
+    def run(self,stop,emit,book_factory=Book,prepare=prepare_book,runtime=None):
         while not stop.is_set():
             item=next((i for i in self.snapshot() if i['state'] in ('pending','paused')),None)
             if not item:break
@@ -290,6 +331,7 @@ class QueueStore:
             try:
                 prepared=prepare(item['path'],tuple(item['source']),stop,lambda msg:emit('import',msg))
                 book=book_factory(prepared,item['model'],tuple(item['source']))
+                if isinstance(book,Book):book.runtime=runtime
                 def progress(done,total,name,original,translated,elapsed):
                     emit('progress',(id,done,total,name,original,translated,elapsed))
                 warnings=book.run(stop,progress,item['output'])
@@ -307,7 +349,7 @@ STATES={'pending':'Čeka','running':'Prevodi se','paused':'Pauzirano','done':'Za
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('BookTranslate '+VERSION);self.geometry('1080x840');self.minsize(860,680)
-        self.events=queue.Queue();self.stop=threading.Event();self.busy=False
+        self.events=queue.Queue();self.stop=threading.Event();self.busy=False;self.runtime=RuntimeControl()
         try:self.jobs=QueueStore()
         except Exception as e:
             messagebox.showerror('Red nije učitan',f'{e}\nSačuvani red nije prepisan.');self.destroy();raise
@@ -321,6 +363,15 @@ class App(tk.Tk):
         ttk.Combobox(row,textvariable=self.source,values=list(LANGS),state='readonly',width=12).pack(side='left',padx=6)
         ttk.Label(row,text='Model:').pack(side='left');ttk.Entry(row,textvariable=self.model,width=25).pack(side='left',padx=6)
         ttk.Button(row,text='Ažuriranja',command=self.settings).pack(side='right')
+        perf=ttk.Frame(f);perf.pack(fill='x',pady=(10,0))
+        cfg=self.runtime.snapshot();self.percent=tk.DoubleVar(value=cfg['percent']);self.device=tk.StringVar(value=cfg['device']);self.intensity_label=tk.StringVar(value=f"{cfg['percent']}%")
+        ttk.Label(perf,text='Intenzitet prevoda:').pack(side='left')
+        ttk.Scale(perf,from_=10,to=100,variable=self.percent,command=lambda v:self.intensity_label.set(f'{round(float(v))}%')).pack(side='left',fill='x',expand=True,padx=6)
+        ttk.Label(perf,textvariable=self.intensity_label,width=5).pack(side='left')
+        ttk.Combobox(perf,textvariable=self.device,values=['GPU','CPU'],state='readonly',width=6).pack(side='left',padx=6)
+        ttk.Button(perf,text='Primeni',command=self.apply_performance).pack(side='left')
+        ttk.Button(perf,text='Igranje: CPU',command=self.gaming).pack(side='left',padx=6)
+        ttk.Label(f,text='Procenat određuje rad i pauze između delova; GPU tokom prevoda može dostići 100%. VRAM ostaje zauzet u GPU režimu.',wraplength=1000).pack(anchor='w',pady=(4,0))
         row=ttk.Frame(f);row.pack(fill='x',pady=10)
         ttk.Label(row,text='Izlazni folder:').pack(side='left');ttk.Entry(row,textvariable=self.folder).pack(side='left',fill='x',expand=True,padx=6)
         ttk.Button(row,text='Izaberi folder',command=self.pick_folder).pack(side='left')
@@ -344,6 +395,11 @@ class App(tk.Tk):
         ttk.Button(row,text='Otvori napredak',command=self.open_data).pack(side='left',padx=8)
         ttk.Label(f,text='Pauza čeka trenutni deo. Knjige se prevode redom; greška jedne knjige ne briše ostale.',wraplength=1000).pack(anchor='w',pady=(10,0))
         self.refresh();self.protocol('WM_DELETE_WINDOW',self.quit_app);self.after(150,self.poll)
+    def apply_performance(self):
+        self.runtime.set(round(self.percent.get()),self.device.get())
+        self.status.set('Podešavanje sačuvano. Primenjuje se na naredni deo. CPU režim koristi 2 niti i može znatno usporiti prevod.')
+    def gaming(self):
+        self.device.set('CPU');self.percent.set(25);self.intensity_label.set('25%');self.apply_performance()
     def settings(self):
         from tkinter import simpledialog
         cfgpath=BASE/'updates.json'
@@ -397,7 +453,7 @@ class App(tk.Tk):
             self.status.set('Nema knjiga na čekanju. Za knjige sa greškom izaberi Ponovi izabrane.');return
         self.busy=True;self.stop.clear();self.start.config(state='disabled');self.pause.config(state='normal');self.retry.config(state='disabled');self.remove.config(state='disabled')
         def work():
-            try:self.jobs.run(self.stop,lambda kind,data:self.events.put((kind,data)))
+            try:self.jobs.run(self.stop,lambda kind,data:self.events.put((kind,data)),runtime=self.runtime)
             except Exception as e:self.events.put(('fatal',str(e)));self.events.put(('finished',None))
         threading.Thread(target=work,daemon=True).start()
     def poll(self):

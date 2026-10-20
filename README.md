@@ -60,3 +60,20 @@ dokumenti mogu imati greške u redosledu ili izostavljen tekst na slikama.
 Windows konverteri i Tesseract su spoljne instalacije; testirane su njihove
 integracione putanje pomoću zamena, a stvarno izdvajanje običnog PDF teksta
 i stvaranje EPUB-a provereni su lokalno.
+
+## Intenzitet rada (1.3.0)
+
+Klizač 10–100% kontroliše odnos vremena računanja i pauze između novih delova.
+Na 50% aplikacija posle dela čeka približno koliko je taj deo trajao, a na 25%
+čeka približno tri puta toliko. Vreme učitavanja i ostalih aplikacija može da
+promeni stvarno prosečno opterećenje. Ovo nije hardverski limit GPU zauzeća:
+tokom računanja GPU može dostići 100%, a VRAM ostaje zauzet i tokom pauza.
+Promene se čuvaju i važe za sve knjige, od narednog dela.
+
+Dugme Igranje: CPU postavlja CPU režim sa dve niti i intenzitetom 25%.
+Ollami se šalje num_gpu=0, a postojeći model se uklanja pre promene uređaja.
+Provera stvarnog GPU/VRAM ponašanja i FPS-a zahteva probu na korisnikovom računaru.
+Ako je red pauziran, CPU režim se primenjuje tek kada ga nastaviš. Prevod je
+znatno sporiji; priprema/OCR dokumenata nije obuhvaćena ovim klizačem.
+Za potpuno mirovanje koristi Pauziraj red. Za ručno oslobađanje modela iz
+memorije posle pauze: ollama stop translategemma:12b.
