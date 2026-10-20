@@ -1,0 +1,31 @@
+AUTOMATSKA AŽURIRANJA — pripremljeno, još nije povezano
+
+Potreban je javni GitHub repozitorijum za BookTranslate. Knjige se ne šalju u njega.
+Aplikacija koristi javni GitHub Releases API, bez tokena na tvom računaru.
+
+Podešavanje jednom:
+1. Postavi sadržaj foldera BookTranslate u koren GitHub repozitorijuma.
+   Uključi .github/workflows/release.yml. Ne dodaj .venv, projekte, knjige ni tokene.
+2. Za novu verziju uskladi VERSION fajl i VERSION vrednost u app.py, npr. 1.1.1.
+3. Sačuvaj commit i objavi git tag v1.1.1. GitHub Actions proverava testove,
+   pravi ZIP i SHA-256 i objavljuje release sa ta dva fajla.
+4. U aplikaciji klikni Ažuriranja i unesi vlasnik/repo ili GitHub URL.
+
+Posle toga:
+- POKRENI.bat pri svakom pokretanju proverava poslednji stabilni release.
+- Noviju verziju preuzima, proverava SHA-256 i Python sintaksu, instalira njene
+  zavisnosti i tek onda aktivira poseban direktorijum te verzije.
+- Bez interneta ili pri grešci preuzimanja pokreće postojeću verziju.
+- Ažuriranje se ne pokreće tokom prevoda.
+- Knjige, red i SQLite napredak ostaju u LOCALAPPDATA\BookTranslate.
+- Ako nova aplikacija odmah padne, launcher pokušava uključenu verziju i
+  isključuje automatska ažuriranja. Ovo ne vraća promene zavisnosti koje je pip
+  već napravio niti može da otkrije sve kasnije greške u radu interfejsa.
+- SHA-256 potvrđuje integritet preuzimanja; nije nezavisan digitalni potpis.
+  Koristi samo repozitorijum koji kontrolišeš i kome veruješ.
+
+Ovaj paket još nije vezan za repozitorijum. Postavljanje i objavljivanje release-a
+nisu izvršeni. Pošalji URL kada repozitorijum bude napravljen.
+
+Stabilni launcher (updater.py i POKRENI.bat) se ovom šemom ne ažurira automatski;
+ako promenimo sam launcher, potrebno je jednom preuzeti nov puni ZIP.

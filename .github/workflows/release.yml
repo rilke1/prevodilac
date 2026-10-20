@@ -1,0 +1,31 @@
+name: Publish BookTranslate update
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -v
+      - run: python build_release.py
+      - name: Publish assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="v$(cat VERSION | tr -d '\r\n')"
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release already exists; increase VERSION and app.py VERSION for the next release."
+          else
+            gh release create "$TAG_NAME" dist/BookTranslate-update.zip dist/BookTranslate-update.sha256 --target "$GITHUB_SHA" --generate-notes
+          fi

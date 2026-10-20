@@ -1,0 +1,57 @@
+BookTranslate 1.1.0 — Windows, lokalni prevod EPUB knjiga
+
+1. Ollama mora biti instalirana i pokrenuta. Model koji si već preuzeo:
+   translategemma:12b
+2. Instaliraj Python 3.10 ili noviji sa https://www.python.org/downloads/windows/
+   Koristi standardni Windows installer sa Python launcher-om (py) i Tcl/Tk.
+3. Raspakuj ceo ZIP u svoj folder, npr. Documents\BookTranslate.
+4. Dvaput klikni POKRENI.bat. Pri prvom pokretanju preuzima lxml paket.
+5. Izaberi izlazni folder, jezik i model za knjige koje ćeš dodati.
+6. Klikni + Dodaj knjige. U prozoru koristi Ctrl ili Shift za izbor više EPUB-ova.
+7. Klikni Pokreni / Nastavi red. Knjige se prevode jedna za drugom.
+   Možeš da dodaš još knjiga dok prevod radi. Duplikati u redu se preskaču.
+   Jezik, model i izlazni folder pamte se za svaku knjigu pri dodavanju.
+8. Ukloni izabrane menja samo red; ne briše knjigu, prevod ili sačuvan napredak.
+   Ponovi izabrane vraća izabrane stavke na čekanje, uz korišćenje sačuvanih delova.
+   Za promenu jezika/modela ukloni knjigu iz reda pa je dodaj sa novim podešavanjima.
+9. Greška jedne knjige ne prekida preostale. Klikni stavku da vidiš grešku,
+   otkloni uzrok i koristi Ponovi izabrane.
+10. Ažuriranja: vidi AZURIRANJA.txt. Mehanizam je pripremljen, repozitorijum
+    još nije povezan; podrazumevano nema provere novih verzija.
+
+Pauza čeka završetak trenutnog dela i pauzira ceo red. Red se automatski učitava
+posle zatvaranja programa. Klikni Pokreni / Nastavi red da nastaviš.
+Izlazna imena se biraju bez zamene postojećih fajlova prilikom dodavanja u red.
+Nemoj naknadno stavljati druge fajlove na već rezervisane izlazne putanje.
+Završeni prevodi su u %LOCALAPPDATA%\BookTranslate\projekti, odvojeno od programa.
+Brisanje tog foldera briše napredak. Aplikacija ne uspavljuje niti budi računar:
+u Windows podešavanjima isključi automatsko uspavljivanje dok prevod radi.
+Prevod se šalje samo Ollami na 127.0.0.1. Nema API ključa ni plaćanja po prevodu.
+Prva instalacija zavisnosti i preuzimanje modela zahtevaju internet.
+
+OBIM I OGRANIČENJA
+- Ova verzija podržava samo EPUB bez zaštite. MOBI/DOC/PDF prvo konvertuj u EPUB.
+- Slike, CSS, fusnote i njihove veze, poglavlja i navigacija ostaju u arhivi.
+- Tekst unutar kurziva/linkova i okolni tekst prevode se odvojeno da se sačuva
+  struktura. To može da oslabi kontekst rečenice i kvalitet prevoda.
+- Veoma dugi tekstualni delovi se dele. Ne postoji rečnik terminologije ni
+  kontekst između delova. Nisu dodata nova poglavlja ni podnaslovi.
+- Nazivi poglavlja i sadržaj se prevode; autor i ostali metapodaci se zadržavaju.
+- Latinica se dodatno osigurava preslovljavanjem ćiriličnog izlaza.
+- Prazan ili odsečen odgovor prekida obradu; ostaje sačuvan prethodni napredak.
+- Jednostavna provera vrlo kratkog odgovora pravi .provera.txt uz izlaz kada
+  primeti sumnjive nove prevode. To nije potpuna provera izostavljanja ili značenja.
+- Izlaz se proverava kao ZIP i XML, ali nije sertifikovan EPUBCheck-om.
+- Prvo prevedi kratku knjigu ili uzorak i pregledaj rezultat u svom EPUB čitaču.
+
+PROBLEMI
+Ollama nije dostupna: pokreni Ollama iz Start menija.
+Model nije pronađen: u PowerShell-u pokreni ollama pull translategemma:12b
+Python nije pronađen: instaliraj Python sa launcher-om, ponovo otvori POKRENI.bat.
+Aplikacija ne podržava istovremene prevode iste knjige iz više prozora.
+
+VALIDACIJA
+Osam automatskih testova koristi lažni prevodilac i lokalne probne pakete:
+pakovanje, veze, slike, pauza, nastavak, red i oporavak, zaštita originala,
+SHA-256 i blokiranje neispravnog ažuriranja. GitHub release nije objavljen. Stvarni TranslateGemma prevod i Windows interfejs
+moraju se proveriti na korisnikovom računaru; ovde nisu izvršeni.
