@@ -1,6 +1,6 @@
 # BookTranslate / Prevodilac
 
-Windows aplikacija za lokalni prevod EPUB knjiga preko Ollama / TranslateGemma.
+Windows aplikacija za lokalni prevod knjiga i dokumenata preko Ollama / TranslateGemma.
 
 - Red za više knjiga; obrada jedna po jedna, uz dodavanje tokom rada.
 - Čuvanje reda i završenih prevoda; pauza i nastavak posle zatvaranja.
@@ -36,5 +36,27 @@ Stabilni launcher se menja ručnim preuzimanjem novog punog paketa.
 
 `python -m unittest discover -v`
 
-Osam testova pokriva EPUB strukturu, nastavak, red, oporavak i provere ažuriranja.
+Dvanaest testova pokriva EPUB strukturu, nastavak, red, oporavak i provere ažuriranja.
 Stvarni GPU prevod i Windows interfejs zahtevaju proveru na Windows računaru.
+
+## Ulazni formati (1.2.0)
+
+EPUB direktno; MOBI, AZW/AZW3/AZW4, PRC, FB2, DOCX, ODT, RTF, HTML,
+HTMLZ, LIT, LRF, PDB, PML/PMLZ, RB, SNB, TCR i CHM preko Calibre-a.
+TXT i Markdown kao običan tekst. PDF/XPS i PNG/JPEG/TIFF/BMP/WebP kroz
+izdvajanje teksta i Tesseract OCR. DjVu/DJV (i ekstenzija DJWU) zahteva
+DjVuLibre ddjvu koji prvo pravi PDF. Stari DOC zahteva LibreOffice + Calibre.
+
+Instaliraj [Calibre](https://calibre-ebook.com/download_windows). Za DjVu
+instaliraj [DjVuLibre](https://djvu.sourceforge.net/) sa ddjvu u PATH-u.
+Za OCR instaliraj [Tesseract](https://tesseract-ocr.github.io/tessdoc/Installation.html)
+sa odgovarajućim jezičkim paketima: eng, lat, fra, deu ili ara.
+Standardni Windows folderi za ove alate se automatski pretražuju.
+
+Izlaz je uvek EPUB. Zaštićene knjige i proizvoljni binarni formati nisu podržani.
+PDF, DjVu i slike daju tekst po stranama: originalni raspored, slike i fusnote
+nisu rekonstruisani. OCR treba pregledati; višekolonski i mešoviti sken/tekst
+dokumenti mogu imati greške u redosledu ili izostavljen tekst na slikama.
+Windows konverteri i Tesseract su spoljne instalacije; testirane su njihove
+integracione putanje pomoću zamena, a stvarno izdvajanje običnog PDF teksta
+i stvaranje EPUB-a provereni su lokalno.

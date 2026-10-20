@@ -9,7 +9,7 @@ if errorlevel 1 (
 )
 if not exist .venv\Scripts\python.exe py -3 -m venv .venv
 if not exist .venv\Scripts\python.exe goto fail
-.venv\Scripts\python.exe -c "import lxml" >nul 2>nul
+.venv\Scripts\python.exe -c "import lxml, pymupdf" >nul 2>nul
 if errorlevel 1 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe updater.py
 if errorlevel 1 goto fail

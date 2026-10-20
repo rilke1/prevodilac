@@ -23,17 +23,17 @@ class QueueTests(unittest.TestCase):
             books=[p/n for n in ('one.epub','bad.epub','two.epub')]
             self.assertEqual(q.add(books,p,'m',LANGS['Engleski']),3)
             self.assertEqual(q.add(books,p,'m',LANGS['Engleski']),0)
-            q.run(threading.Event(),lambda *a:None,FakeBook)
+            q.run(threading.Event(),lambda *a:None,FakeBook,lambda path,*args:path)
             self.assertEqual([i['state'] for i in q.snapshot()],['done','error','done'])
             self.assertEqual([Path(c[0]).name for c in FakeBook.calls],['one.epub','bad.epub','two.epub'])
-            restored=QueueStore(q.path);restored.run(threading.Event(),lambda *a:None,FakeBook)
+            restored=QueueStore(q.path);restored.run(threading.Event(),lambda *a:None,FakeBook,lambda path,*args:path)
             self.assertEqual(len(FakeBook.calls),3)
     def test_pause_stops_whole_queue(self):
         with tempfile.TemporaryDirectory() as t:
             p=Path(t);q=QueueStore(p/'red.json');q.add([p/'a.epub',p/'b.epub'],p,'m',LANGS['Engleski'])
-            FakeBook.pause=True;q.run(threading.Event(),lambda *a:None,FakeBook)
+            FakeBook.pause=True;q.run(threading.Event(),lambda *a:None,FakeBook,lambda path,*args:path)
             self.assertEqual([i['state'] for i in q.snapshot()],['paused','pending'])
-            FakeBook.pause=False;q=QueueStore(q.path);q.run(threading.Event(),lambda *a:None,FakeBook)
+            FakeBook.pause=False;q=QueueStore(q.path);q.run(threading.Event(),lambda *a:None,FakeBook,lambda path,*args:path)
             self.assertEqual([i['state'] for i in q.snapshot()],['done','done'])
     def test_crash_recovery_and_name_collision(self):
         with tempfile.TemporaryDirectory() as t:

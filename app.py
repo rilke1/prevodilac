@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -137,6 +137,115 @@ def atomic_json(path, data):
         json.dump(data,f,ensure_ascii=False,indent=2);f.flush();os.fsync(f.fileno())
     os.replace(temp,path)
 
+# Supported source formats. Output is always EPUB.
+CALIBRE_EXT={'.mobi','.azw','.azw3','.azw4','.prc','.fb2','.docx','.odt','.rtf','.html','.htm','.htmlz','.txtz','.lit','.lrf','.pdb','.pml','.pmlz','.rb','.snb','.tcr','.chm'}
+IMPORT_EXT=CALIBRE_EXT|{'.epub','.pdf','.djvu','.djv','.djwu','.txt','.md','.doc','.png','.jpg','.jpeg','.tif','.tiff','.bmp','.webp','.xps'}
+
+def find_tool(name,relative):
+    import shutil
+    found=shutil.which(name)
+    if found:return found
+    for env in ('ProgramFiles','ProgramFiles(x86)','LOCALAPPDATA'):
+        for rel in relative:
+            path=Path(os.environ.get(env,''))/rel
+            if path.is_file():return str(path)
+    return None
+
+def tool_run(args,stop):
+    import subprocess,tempfile
+    # File-backed output avoids a full pipe deadlock on verbose converters.
+    with tempfile.TemporaryFile() as log:
+        p=subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        started=time.monotonic()
+        try:
+            while p.poll() is None:
+                if stop.wait(.2):raise Paused()
+                if time.monotonic()-started>3600:raise RuntimeError('Konverzija je trajala duže od jednog sata.')
+            log.seek(0);output=log.read().decode('utf-8',errors='replace')
+            if p.returncode:raise RuntimeError('Konverzija/OCR nije uspeo:\n'+output[-1800:])
+            return output
+        finally:
+            if p.poll() is None:p.kill();p.wait()
+
+def text_epub(pages,title,output):
+    import html,uuid
+    esc=html.escape;uid=uuid.uuid4().hex
+    manifest=[];spine=[];nav=[]
+    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as z:
+        z.writestr('mimetype','application/epub+zip',compress_type=zipfile.ZIP_STORED)
+        z.writestr('META-INF/container.xml','<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+        for i,(heading,text) in enumerate(pages):
+            name=f'part{i}.xhtml';id=f'p{i}'
+            paragraphs=''.join('<p>'+esc(p).replace('\n','<br/>')+'</p>' for p in re.split(r'\n\s*\n',text) if p.strip())
+            z.writestr(name,f'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{esc(heading)}</title></head><body><h1>{esc(heading)}</h1>{paragraphs}</body></html>')
+            manifest.append(f'<item id="{id}" href="{name}" media-type="application/xhtml+xml"/>');spine.append(f'<itemref idref="{id}"/>');nav.append(f'<li><a href="{name}">{esc(heading)}</a></li>')
+        z.writestr('nav.xhtml','<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body><nav epub:type="toc"><ol>'+''.join(nav)+'</ol></nav></body></html>')
+        z.writestr('book.opf',f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">{uid}</dc:identifier><dc:title>{esc(title)}</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest>'+''.join(manifest)+'<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine>'+''.join(spine)+'</spine></package>')
+
+def read_text(path):
+    data=Path(path).read_bytes()
+    for encoding in ('utf-8-sig','utf-16','cp1252'):
+        try:return data.decode(encoding)
+        except UnicodeError:pass
+    raise ValueError('Kodiranje teksta nije prepoznato. Sačuvaj ga kao UTF-8.')
+
+def prepare_book(path,source,stop,notify,root=BASE):
+    import tempfile,shutil
+    path=Path(path);ext=path.suffix.lower()
+    if not path.is_file():raise ValueError('Izvorni fajl više nije dostupan: '+str(path))
+    if ext not in IMPORT_EXT:raise ValueError('Format nije podržan: '+ext+'. Konvertuj dokument u EPUB ili PDF.')
+    if ext=='.epub':return path
+    digest=hashlib.sha256(path.read_bytes()+str(source).encode()+b'import-v1').hexdigest()
+    folder=root/'uvoz'/digest;folder.mkdir(parents=True,exist_ok=True);out=folder/'book.epub'
+    if out.exists():return out
+    notify('Pripremam '+path.name+'…')
+    with tempfile.TemporaryDirectory(dir=folder) as td:
+        stage=Path(td);result=stage/'book.epub';input_path=path
+        if ext in {'.djvu','.djv','.djwu'}:
+            ddjvu=find_tool('ddjvu',['DjVuLibre/ddjvu.exe','DjVuLibre/bin/ddjvu.exe'])
+            if not ddjvu:raise RuntimeError('Za DjVu instaliraj DjVuLibre (ddjvu.exe) i dodaj njegov folder u PATH. Potom Ponovi izabrane.')
+            input_path=stage/'scan.pdf';tool_run([ddjvu,'-format=pdf',str(path),str(input_path)],stop);ext='.pdf'
+        if ext in {'.pdf','.xps','.png','.jpg','.jpeg','.tif','.tiff','.bmp','.webp'}:
+            import pymupdf
+            pages=[];ocr_lang={'en':'eng','la':'lat','fr':'fra','de':'deu','ar':'ara'}[source[1]]
+            with pymupdf.open(input_path) as doc:
+                if doc.needs_pass:raise ValueError('Dokument je zaključan lozinkom. Sačuvaj otključanu kopiju.')
+                for n,page in enumerate(doc):
+                    if stop.is_set():raise Paused()
+                    notify(f'{path.name}: čitam stranu {n+1}/{len(doc)}…')
+                    text=page.get_text('text',sort=True)
+                    if len(''.join(c for c in text if c.isalpha()))<25:
+                        tesseract=find_tool('tesseract',['Tesseract-OCR/tesseract.exe','Programs/Tesseract-OCR/tesseract.exe'])
+                        if not tesseract:raise RuntimeError('Strana '+str(n+1)+' zahteva OCR. Instaliraj Tesseract OCR sa jezikom '+ocr_lang+' pa Ponovi izabrane. Prazne strane takođe zahtevaju OCR proveru.')
+                        image=stage/'page.png';page.get_pixmap(dpi=200).save(image)
+                        dest=stage/'ocr';tool_run([tesseract,str(image),str(dest),'-l',ocr_lang],stop)
+                        text=dest.with_suffix('.txt').read_text(encoding='utf-8')
+                    pages.append((f'Page {n+1}',text))
+            if not any(t.strip() for _,t in pages):raise ValueError('Nije pronađen tekst ni posle OCR-a.')
+            text_epub(pages,path.stem,result)
+            (folder/'NAPOMENA.txt').write_text('PDF/DjVu/slike: tekst je izdvojen po stranama, uz OCR gde nema dovoljno teksta. Originalni raspored, slike i fusnote nisu rekonstruisani. Proveri redosled kolona i OCR greške.',encoding='utf-8')
+        elif ext in {'.txt','.md'}:
+            text=read_text(path)
+            if not text.strip():raise ValueError('Dokument je prazan.')
+            text_epub([(path.stem,text)],path.stem,result)
+        else:
+            if ext=='.doc':
+                office=find_tool('soffice',['LibreOffice/program/soffice.exe'])
+                if not office:raise RuntimeError('Za stari .doc instaliraj LibreOffice ili sačuvaj dokument kao .docx.')
+                profile=(stage/'lo-profile').as_uri()
+                tool_run([office,'-env:UserInstallation='+profile,'--headless','--convert-to','docx','--outdir',str(stage),str(path)],stop)
+                input_path=stage/(path.stem+'.docx')
+                if not input_path.exists():raise RuntimeError('LibreOffice nije napravio DOCX fajl.')
+            converter=find_tool('ebook-convert',['Calibre2/ebook-convert.exe','Calibre/ebook-convert.exe'])
+            if not converter:raise RuntimeError('Za '+ext+' instaliraj Calibre sa calibre-ebook.com/download_windows, zatim Ponovi izabrane. Aplikacija ga prepoznaje u standardnom folderu ili kroz PATH.')
+            tool_run([converter,str(input_path),str(result)],stop)
+        if stop.is_set():raise Paused()
+        with zipfile.ZipFile(result) as z:
+            if 'META-INF/container.xml' not in z.namelist() or z.testzip():raise ValueError('Konverzija nije napravila ispravan EPUB.')
+        os.replace(result,out)
+    return out
+
+
 class QueueStore:
     def __init__(self,path=BASE/'red.json'):
         self.path=Path(path);self.lock=threading.RLock();self.items=[]
@@ -172,14 +281,15 @@ class QueueStore:
         return count
     def remove(self,ids):
         with self.lock:self.items=[i for i in self.items if i['id'] not in ids];self.save()
-    def run(self,stop,emit,book_factory=Book):
+    def run(self,stop,emit,book_factory=Book,prepare=prepare_book):
         while not stop.is_set():
             item=next((i for i in self.snapshot() if i['state'] in ('pending','paused')),None)
             if not item:break
             id=item['id'];book=None
             self.update(id,state='running',error='');emit('refresh',None)
             try:
-                book=book_factory(item['path'],item['model'],tuple(item['source']))
+                prepared=prepare(item['path'],tuple(item['source']),stop,lambda msg:emit('import',msg))
+                book=book_factory(prepared,item['model'],tuple(item['source']))
                 def progress(done,total,name,original,translated,elapsed):
                     emit('progress',(id,done,total,name,original,translated,elapsed))
                 warnings=book.run(stop,progress,item['output'])
@@ -202,7 +312,7 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror('Red nije učitan',f'{e}\nSačuvani red nije prepisan.');self.destroy();raise
         self.model=tk.StringVar(value='translategemma:12b');self.source=tk.StringVar(value='Engleski');self.folder=tk.StringVar(value=str(Path.home()/'Documents'))
-        self.status=tk.StringVar(value='Dodaj više EPUB knjiga. Red se čuva i posle zatvaranja aplikacije.')
+        self.status=tk.StringVar(value='Dodaj knjige i dokumente (EPUB, MOBI, PDF, DjVu…). Red se čuva i posle zatvaranja aplikacije.')
         f=ttk.Frame(self,padding=20);f.pack(fill='both',expand=True)
         ttk.Label(f,text='BookTranslate',font=('Segoe UI',24,'bold')).pack(anchor='w')
         ttk.Label(f,text='Lokalni prevod knjiga • srpska latinica • red za obradu').pack(anchor='w',pady=(0,14))
@@ -261,7 +371,7 @@ class App(tk.Tk):
         if not model:messagebox.showerror('Model','Unesi naziv modela.');return
         folder=Path(self.folder.get())
         if not folder.is_dir():messagebox.showerror('Folder','Izaberi postojeći izlazni folder.');return
-        paths=filedialog.askopenfilenames(filetypes=[('EPUB knjige','*.epub')])
+        paths=filedialog.askopenfilenames(filetypes=[('Knjige i dokumenti',' '.join('*'+e for e in sorted(IMPORT_EXT))),('Svi fajlovi','*.*')])
         if paths:
             count=self.jobs.add(paths,folder,model,LANGS[self.source.get()]);self.refresh();self.status.set(f'Dodato: {count}. Duplikati su preskočeni. Jezik i model su sačuvani za svaku knjigu.')
     def retry_selected(self):
@@ -296,6 +406,7 @@ class App(tk.Tk):
             try:kind,data=self.events.get_nowait()
             except queue.Empty:break
             if kind=='progress':latest=data
+            elif kind=='import':self.status.set(data)
             elif kind=='refresh':refresh=True
             elif kind=='fatal':messagebox.showerror('Red je zaustavljen',data)
             elif kind=='finished':

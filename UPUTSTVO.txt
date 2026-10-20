@@ -1,4 +1,18 @@
-BookTranslate 1.1.0 — Windows, lokalni prevod EPUB knjiga
+NOVO U 1.2.0
+
+Možeš dodati više različitih formata u isti red. Izlaz je uvek EPUB.
+EPUB radi direktno; za MOBI/AZW/FB2/DOCX/RTF/HTML i druge formate
+instaliraj Calibre: https://calibre-ebook.com/download_windows
+Za DjVu/DJV/DJWU instaliraj DjVuLibre sa ddjvu.exe u PATH-u.
+Za skenirane PDF/DjVu i slike instaliraj Tesseract OCR i jezički paket
+za original knjige (eng za engleski, lat za latinski, fra, deu ili ara).
+Za stari .doc potreban je i LibreOffice.
+Kad alat nedostaje, knjiga dobija status Greška sa uputstvom. Posle
+instalacije zatvori i ponovo otvori aplikaciju pa izaberi Ponovi izabrane.
+PDF/DjVu/slike daju tekst po stranama bez originalnog rasporeda i slika.
+OCR i složene kolone zahtevaju pregled rezultata.
+
+BookTranslate 1.2.0 — Windows, lokalni prevod EPUB knjiga
 
 1. Ollama mora biti instalirana i pokrenuta. Model koji si već preuzeo:
    translategemma:12b
@@ -17,7 +31,7 @@ BookTranslate 1.1.0 — Windows, lokalni prevod EPUB knjiga
 9. Greška jedne knjige ne prekida preostale. Klikni stavku da vidiš grešku,
    otkloni uzrok i koristi Ponovi izabrane.
 10. Ažuriranja: vidi AZURIRANJA.txt. Mehanizam je pripremljen, repozitorijum
-    još nije povezan; podrazumevano nema provere novih verzija.
+    je podešen na rilke1/prevodilac. Mora biti Public za preuzimanje bez tokena.
 
 Pauza čeka završetak trenutnog dela i pauzira ceo red. Red se automatski učitava
 posle zatvaranja programa. Klikni Pokreni / Nastavi red da nastaviš.
@@ -30,7 +44,7 @@ Prevod se šalje samo Ollami na 127.0.0.1. Nema API ključa ni plaćanja po prev
 Prva instalacija zavisnosti i preuzimanje modela zahtevaju internet.
 
 OBIM I OGRANIČENJA
-- Ova verzija podržava samo EPUB bez zaštite. MOBI/DOC/PDF prvo konvertuj u EPUB.
+- Podržani ulazni formati su navedeni u README.md. DRM nije podržan.
 - Slike, CSS, fusnote i njihove veze, poglavlja i navigacija ostaju u arhivi.
 - Tekst unutar kurziva/linkova i okolni tekst prevode se odvojeno da se sačuva
   struktura. To može da oslabi kontekst rečenice i kvalitet prevoda.

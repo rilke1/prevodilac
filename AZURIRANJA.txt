@@ -1,13 +1,14 @@
-AUTOMATSKA AŽURIRANJA — pripremljeno, još nije povezano
+AUTOMATSKA AŽURIRANJA — rilke1/prevodilac
 
-Potreban je javni GitHub repozitorijum za BookTranslate. Knjige se ne šalju u njega.
+Povezana adresa je rilke1/prevodilac. Za preuzimanje bez tokena repo mora biti Public.
+Knjige se ne šalju u njega.
 Aplikacija koristi javni GitHub Releases API, bez tokena na tvom računaru.
 
 Podešavanje jednom:
 1. Postavi sadržaj foldera BookTranslate u koren GitHub repozitorijuma.
    Uključi .github/workflows/release.yml. Ne dodaj .venv, projekte, knjige ni tokene.
 2. Za novu verziju uskladi VERSION fajl i VERSION vrednost u app.py, npr. 1.1.1.
-3. Sačuvaj commit i objavi git tag v1.1.1. GitHub Actions proverava testove,
+3. Sačuvaj commit na main. GitHub Actions proverava testove,
    pravi ZIP i SHA-256 i objavljuje release sa ta dva fajla.
 4. U aplikaciji klikni Ažuriranja i unesi vlasnik/repo ili GitHub URL.
 
@@ -24,8 +25,9 @@ Posle toga:
 - SHA-256 potvrđuje integritet preuzimanja; nije nezavisan digitalni potpis.
   Koristi samo repozitorijum koji kontrolišeš i kome veruješ.
 
-Ovaj paket još nije vezan za repozitorijum. Postavljanje i objavljivanje release-a
-nisu izvršeni. Pošalji URL kada repozitorijum bude napravljen.
+Ovaj paket je podešen za rilke1/prevodilac. Kod je postavljen; proveri Actions
+i Releases na GitHub-u za stanje objave. Dok je repo Private, preuzimanje bez
+prijave neće uspeti i aplikacija nastavlja sa postojećom verzijom.
 
 Stabilni launcher (updater.py i POKRENI.bat) se ovom šemom ne ažurira automatski;
 ako promenimo sam launcher, potrebno je jednom preuzeti nov puni ZIP.
