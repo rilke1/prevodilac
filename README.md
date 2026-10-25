@@ -85,3 +85,16 @@ Ponovna provera pre izvoza pokriva nestanak foldera tokom dugog prevoda.
 Postojeći SQLite prevodi se ponovo koriste; ne treba brisati red ni napredak.
 Testovi pokrivaju nedostajući folder, ponovni izvoz bez novih prevoda i rano
 prijavljivanje neupotrebljive putanje. Ukupno 18 testova.
+
+## HTTPS ažuriranja (1.3.2)
+
+Pokretač koristi eksplicitni certifi CA paket umesto podrazumevanog Windows
+skladišta sertifikata. Provera sertifikata i hostname-a ostaje uključena.
+Test simulira ASN1 grešku podrazumevanog skladišta i proverava siguran kontekst.
+Greške ažuriranja se čuvaju u LOCALAPPDATA\BookTranslate\update.log i prikazuju
+kao obaveštenje u aplikaciji. Ukupno 20 testova prolazi.
+
+Ova izmena menja updater.py: za prelazak sa starog pokretača preuzmi ceo repo
+(Code → Download ZIP) i pokreni POKRENI.bat iz novog raspakovanog foldera.
+Mali release ZIP sadrži samo aplikaciju, zavisnosti i VERSION i ne menja pokretač.
+Red i sačuvani prevodi ostaju u LOCALAPPDATA i ne treba ih brisati.

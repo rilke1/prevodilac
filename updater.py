@@ -1,5 +1,5 @@
 """Stable launcher. Update only between sessions; user data stays in LOCALAPPDATA."""
-import hashlib, io, json, os, re, runpy, shutil, subprocess, sys, tempfile, urllib.request, zipfile
+import hashlib, io, json, os, re, runpy, shutil, ssl, subprocess, sys, tempfile, urllib.request, zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 BASE=Path(os.environ.get('LOCALAPPDATA',str(Path.home())))/'BookTranslate'
@@ -15,10 +15,22 @@ def atomic(path,obj):
     path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix('.tmp')
     with tmp.open('w',encoding='utf-8') as f:json.dump(obj,f);f.flush();os.fsync(f.fileno())
     os.replace(tmp,path)
+def tls_context():
+    # Explicit CA bundle avoids parsing Windows certificate-store entries (ASN1).
+    # Hostname and certificate verification stay enabled.
+    try:
+        import certifi
+    except ImportError:
+        try:
+            from pip._vendor import certifi
+        except ImportError as e:
+            raise RuntimeError('Nedostaje CA paket. Pokreni: python -m pip install certifi') from e
+    return ssl.create_default_context(cafile=certifi.where())
+
 def fetch(url):
     if not url.startswith('https://'):raise ValueError('Ažuriranje zahteva HTTPS.')
     req=urllib.request.Request(url,headers={'User-Agent':'BookTranslate-Updater','Accept':'application/vnd.github+json'})
-    with urllib.request.urlopen(req,timeout=20) as r:
+    with urllib.request.urlopen(req,timeout=20,context=tls_context()) as r:
         data=r.read(MAX_BYTES+1)
     if len(data)>MAX_BYTES:raise ValueError('Paket je prevelik.')
     return data
@@ -87,8 +99,14 @@ def main():
     BASE.mkdir(parents=True,exist_ok=True)
     try:active,ver=choose_active()
     except Exception as e:print('Ne mogu da pročitam izbor verzije:',e);active=ROOT;ver='bundled'
-    try:active,ver=update()
-    except Exception as e:print('Ažuriranje nije primenjeno; pokrećem postojeću verziju:',e)
+    try:
+        active,ver=update()
+        os.environ.pop('BOOKTRANSLATE_UPDATE_ERROR',None)
+    except Exception as e:
+        import traceback
+        print('Ažuriranje nije primenjeno; pokrećem postojeću verziju:',e)
+        os.environ['BOOKTRANSLATE_UPDATE_ERROR']='Ažuriranje nije uspelo. Detalji: '+str(BASE/'update.log')
+        (BASE/'update.log').write_text(traceback.format_exc(),encoding='utf-8')
     print('BookTranslate',ver)
     # GUI does not start a second updater or mutate source files in use.
     try:runpy.run_path(str(active/'app.py'),run_name='__main__')

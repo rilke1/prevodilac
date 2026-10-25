@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.3.1'
+VERSION = '1.3.2'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -374,6 +374,8 @@ class App(tk.Tk):
         f=ttk.Frame(self,padding=20);f.pack(fill='both',expand=True)
         ttk.Label(f,text='BookTranslate',font=('Segoe UI',24,'bold')).pack(anchor='w')
         ttk.Label(f,text='Lokalni prevod knjiga • srpska latinica • red za obradu').pack(anchor='w',pady=(0,14))
+        if os.environ.get('BOOKTRANSLATE_UPDATE_ERROR'):
+            ttk.Label(f,text=os.environ['BOOKTRANSLATE_UPDATE_ERROR'],foreground='#a00000',wraplength=1000).pack(anchor='w',pady=(0,8))
         row=ttk.Frame(f);row.pack(fill='x')
         ttk.Label(row,text='Za nove knjige — jezik:').pack(side='left')
         ttk.Combobox(row,textvariable=self.source,values=list(LANGS),state='readonly',width=12).pack(side='left',padx=6)
