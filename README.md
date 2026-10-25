@@ -77,3 +77,11 @@ Ako je red pauziran, CPU režim se primenjuje tek kada ga nastaviš. Prevod je
 znatno sporiji; priprema/OCR dokumenata nije obuhvaćena ovim klizačem.
 Za potpuno mirovanje koristi Pauziraj red. Za ručno oslobađanje modela iz
 memorije posle pauze: ollama stop translategemma:12b.
+
+## Ispravka čuvanja (1.3.1)
+
+Izlazni folder se pravi ako nedostaje i proverava se pravo upisa pre obrade.
+Ponovna provera pre izvoza pokriva nestanak foldera tokom dugog prevoda.
+Postojeći SQLite prevodi se ponovo koriste; ne treba brisati red ni napredak.
+Testovi pokrivaju nedostajući folder, ponovni izvoz bez novih prevoda i rano
+prijavljivanje neupotrebljive putanje. Ukupno 18 testova.

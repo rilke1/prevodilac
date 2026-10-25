@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -57,6 +57,18 @@ def translate(text, model, source, runtime=None):
     if not out: raise RuntimeError('Model je vratio prazan prevod. Pokušaj ponovo.')
     return latin(out)
 
+def prepare_output(output,original=None):
+    import tempfile
+    output=Path(output)
+    if original is not None and output.resolve()==Path(original).resolve():
+        raise ValueError('Izlaz ne sme da zameni originalnu knjigu.')
+    try:
+        output.parent.mkdir(parents=True,exist_ok=True)
+        with tempfile.NamedTemporaryFile(prefix='booktranslate-check-',dir=output.parent):pass
+    except OSError as e:
+        raise RuntimeError(f'Ne mogu da sačuvam knjigu u folder: {output.parent}. Proveri da folder postoji i da imaš pravo upisa. Detalj: {e}') from e
+    return output
+
 class Paused(Exception): pass
 class Book:
     def __init__(self,path,model,source,root=BASE):
@@ -98,6 +110,7 @@ class Book:
     def add(self,name,el,attr,text):
         if any(c.isalpha() for c in text): self.slots.append((name,el,attr,split(text)))
     def run(self,stop,notify,output):
+        output=prepare_output(output,self.path)
         done=0; started=time.monotonic()
         for name,el,attr,parts in self.slots:
             translated=[]
@@ -125,6 +138,8 @@ class Book:
         if stop.is_set(): raise Paused()
         output=Path(output)
         if output.resolve()==self.path.resolve(): raise ValueError('Izlaz ne sme da zameni originalnu knjigu.')
+        # The folder may have disappeared during a long translation.
+        prepare_output(output,self.path)
         temp=output.with_name(output.name+'.tmp')
         try:
             with zipfile.ZipFile(self.path) as src, zipfile.ZipFile(temp,'w') as dst:
@@ -329,6 +344,7 @@ class QueueStore:
             id=item['id'];book=None
             self.update(id,state='running',error='');emit('refresh',None)
             try:
+                prepare_output(item['output'],item['path'])
                 prepared=prepare(item['path'],tuple(item['source']),stop,lambda msg:emit('import',msg))
                 book=book_factory(prepared,item['model'],tuple(item['source']))
                 if isinstance(book,Book):book.runtime=runtime
