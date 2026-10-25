@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.3.2'
+VERSION = '1.3.3'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -335,6 +335,22 @@ class QueueStore:
                 sources.add(p);used.add(output.resolve());count+=1
             self.save()
         return count
+    def change_output_folder(self,folder):
+        folder=Path(folder).resolve()
+        prepare_output(folder/'probe.epub')
+        changed=0
+        with self.lock:
+            used={Path(i['output']).resolve() for i in self.items if i['state']=='done'}
+            for item in self.items:
+                if item['state']=='done':continue
+                old=Path(item['output']);target=folder/old.name;n=2
+                same=target.resolve()==old.resolve()
+                while target.resolve() in used or target.resolve()==Path(item['path']).resolve() or (target.exists() and not same):
+                    target=folder/(old.stem+f' ({n})'+old.suffix);n+=1;same=False
+                item['output']=str(target);used.add(target.resolve())
+                item['state']='pending';item['error']='';changed+=1
+            self.save()
+        return changed
     def remove(self,ids):
         with self.lock:self.items=[i for i in self.items if i['id'] not in ids];self.save()
     def run(self,stop,emit,book_factory=Book,prepare=prepare_book,runtime=None):
@@ -393,6 +409,7 @@ class App(tk.Tk):
         row=ttk.Frame(f);row.pack(fill='x',pady=10)
         ttk.Label(row,text='Izlazni folder:').pack(side='left');ttk.Entry(row,textvariable=self.folder).pack(side='left',fill='x',expand=True,padx=6)
         ttk.Button(row,text='Izaberi folder',command=self.pick_folder).pack(side='left')
+        self.apply_folder=ttk.Button(row,text='Primeni folder na red',command=self.apply_output_folder);self.apply_folder.pack(side='left',padx=6)
         row=ttk.Frame(f);row.pack(fill='x',pady=(0,10))
         ttk.Button(row,text='+ Dodaj knjige',command=self.add).pack(side='left')
         self.start=ttk.Button(row,text='Pokreni / Nastavi red',command=self.go);self.start.pack(side='left',padx=6)
@@ -437,6 +454,12 @@ class App(tk.Tk):
             if self.tree.exists(i['id']):self.tree.item(i['id'],values=vals)
             else:self.tree.insert('','end',iid=i['id'],values=vals)
         self.tree.selection_set([id for id in selected if id in ids])
+    def apply_output_folder(self):
+        if self.busy:
+            messagebox.showinfo('Izlazni folder','Prvo pauziraj red i sačekaj završetak tekućeg dela.');return
+        try:count=self.jobs.change_output_folder(self.folder.get())
+        except Exception as e:messagebox.showerror('Izlazni folder',str(e));return
+        self.refresh();self.status.set(f'Folder je promenjen za {count} nezavršenih knjiga. Klikni Pokreni / Nastavi red. Sačuvani prevodi se ponovo koriste.')
     def pick_folder(self):
         p=filedialog.askdirectory()
         if p:self.folder.set(p)
