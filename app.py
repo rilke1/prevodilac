@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.3.3'
+VERSION = '1.3.4'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -34,7 +34,29 @@ def split(text, limit=2200):
     if text: result.append(text)
     return result
 
+class TranslationLengthError(RuntimeError): pass
+
 def translate(text, model, source, runtime=None):
+    def piece(value, depth=0):
+        try:
+            return _translate_once(value, model, source, runtime)
+        except TranslationLengthError:
+            # Never reuse a truncated response. Retry the original in smaller pieces.
+            if depth >= 5 or len(value) < 80:
+                raise RuntimeError('Model dostiže ograničenje i na kratkom tekstu. '
+                    'Prevod ovog dela nije sačuvan kao završen. Pokušaj ponovo ili proveri model.')
+            middle=len(value)//2
+            breaks=[m.start() for m in re.finditer(r'\s+',value)
+                    if len(value)//3 <= m.start() <= 2*len(value)//3]
+            cut=min(breaks,key=lambda n:abs(n-middle)) if breaks else middle
+            left,right=value[:cut],value[cut:]
+            separator=right[:len(right)-len(right.lstrip())]
+            a=piece(left.rstrip(),depth+1)
+            b=piece(right.lstrip(),depth+1)
+            return a+(separator or ' ')+b
+    return piece(text)
+
+def _translate_once(text, model, source, runtime=None):
     name,code=source
     prompt=(f'You are a professional {name} ({code}) to Serbian Latin (sr-Latn) translator. '
         f'Your goal is to accurately convey the meaning and nuances of the original {name} text while adhering to Serbian grammar, vocabulary, and cultural sensitivities. '
@@ -52,7 +74,7 @@ def translate(text, model, source, runtime=None):
         raise RuntimeError('Ollama: '+e.read().decode('utf-8',errors='replace')[:700]) from e
     except (urllib.error.URLError, TimeoutError) as e:
         raise RuntimeError('Ollama nije dostupna ili je odgovor istekao. Pokreni Ollama, proveri model i klikni Nastavi.') from e
-    if data.get('done_reason')=='length': raise RuntimeError('Prevod je dostigao ograničenje dužine. Deo nije sačuvan kao završen.')
+    if data.get('done_reason')=='length': raise TranslationLengthError('Odgovor je odsečen.')
     out=data.get('message',{}).get('content','').strip()
     if not out: raise RuntimeError('Model je vratio prazan prevod. Pokušaj ponovo.')
     return latin(out)
