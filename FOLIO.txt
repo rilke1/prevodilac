@@ -1,0 +1,31 @@
+FOLIO — POVEZIVANJE SA TVOJIM RAČUNAROM
+
+1. Pokreni POKRENI.bat i proveri da je verzija najmanje 1.4.0.
+2. Otvori https://folio-marijo.autokomanda.chatgpt.site na Windowsu.
+3. Izaberi „Prevod preko mog računara”, pa „Preuzmi fajl za povezivanje”.
+4. U BookTranslate-u klikni „Folio” i izaberi Folio-povezivanje.json.
+5. U Foliju dodaj knjigu u red. Sačekaj da piše da je računar povezan.
+
+Posle ovog povezivanja program radi u pozadini i posle zatvaranja prozora.
+Pokreće se pri tvojoj prijavi u Windows. Zaključavanje preko Win+L ne smeta.
+Dok radi, pozadinski proces sprečava automatsko spavanje računara; ekran može
+normalno da se ugasi. Ručni Sleep, odjava, restart ili prekid interneta
+prekidaju rad; nezavršen zadatak može kasnije da nastavi iz sačuvanih delova.
+Ne otvara se mrežni port na računaru niti se Ollama izlaže internetu.
+Lokalni red i Folio dele prevodilački proces: samo jedan red radi u datom času.
+Folio koristi translategemma:12b i postojeća podešavanja intenziteta/GPU/CPU.
+Za konverziju drugih formata koriste se postojeći lokalni alati.
+
+Fajl za povezivanje sadrži privatne pristupne podatke: ne šalji ga drugima.
+Program ga čuva zaštićenog Windows DPAPI-jem za trenutni Windows nalog.
+Posle uvoza možeš obrisati preuzeti JSON iz Downloads foldera.
+„Folio – isključi” prekida vezu i uklanja automatsko pokretanje.
+U Foliju „Opozovi sve veze sa računarima” ukida ranije izdate pristupe.
+
+Direktni javni HTTPS linkovi do fajlova su podržani. Stranice knjiga,
+prijava, izbor formata na stranici i CAPTCHA nisu automatizovani.
+Original i prevod pojavljuju se u Foliju kada obrada uspe. Za ranije
+uvezenu knjigu koristi Podešavanja čitanja → Prevod preko mog računara.
+Greške i napredak su u Foliju; za ponavljanje klikni „Pokušaj ponovo”.
+Lokalni napredak za ovu vezu je u LOCALAPPDATA\BookTranslate\folio-jobs,
+a opšti status povezivanja u LOCALAPPDATA\BookTranslate\folio.log.

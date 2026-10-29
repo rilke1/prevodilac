@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.3.4'
+VERSION = '1.4.0'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -90,6 +90,32 @@ def prepare_output(output,original=None):
     except OSError as e:
         raise RuntimeError(f'Ne mogu da sačuvam knjigu u folder: {output.parent}. Proveri da folder postoji i da imaš pravo upisa. Detalj: {e}') from e
     return output
+
+class TranslationGate:
+    """One translation at a time across the desktop queue and Folio worker."""
+    def __enter__(self):
+        BASE.mkdir(parents=True,exist_ok=True)
+        self.file=(BASE/'translation.lock').open('a+b')
+        self.file.seek(0);self.file.write(b'0');self.file.flush();self.file.seek(0)
+        try:
+            if os.name=='nt':
+                import msvcrt
+                msvcrt.locking(self.file.fileno(),msvcrt.LK_NBLCK,1)
+            else:
+                import fcntl
+                fcntl.flock(self.file.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except OSError:
+            self.file.close();raise BlockingIOError('Drugi red trenutno prevodi knjigu.')
+        return self
+    def __exit__(self,*args):
+        self.file.seek(0)
+        if os.name=='nt':
+            import msvcrt
+            msvcrt.locking(self.file.fileno(),msvcrt.LK_UNLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(self.file.fileno(),fcntl.LOCK_UN)
+        self.file.close()
 
 class Paused(Exception): pass
 class Book:
@@ -376,6 +402,13 @@ class QueueStore:
     def remove(self,ids):
         with self.lock:self.items=[i for i in self.items if i['id'] not in ids];self.save()
     def run(self,stop,emit,book_factory=Book,prepare=prepare_book,runtime=None):
+        try:
+            with TranslationGate():
+                return self._run(stop,emit,book_factory,prepare,runtime)
+        except BlockingIOError:
+            emit('import','Folio trenutno prevodi knjigu. Sačekaj završetak pa pokreni lokalni red.')
+            emit('finished',None)
+    def _run(self,stop,emit,book_factory=Book,prepare=prepare_book,runtime=None):
         while not stop.is_set():
             item=next((i for i in self.snapshot() if i['state'] in ('pending','paused')),None)
             if not item:break
@@ -403,6 +436,7 @@ STATES={'pending':'Čeka','running':'Prevodi se','paused':'Pauzirano','done':'Za
 class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('BookTranslate '+VERSION);self.geometry('1080x840');self.minsize(860,680)
+        folio_start_worker()
         self.events=queue.Queue();self.stop=threading.Event();self.busy=False;self.runtime=RuntimeControl()
         try:self.jobs=QueueStore()
         except Exception as e:
@@ -419,6 +453,8 @@ class App(tk.Tk):
         ttk.Combobox(row,textvariable=self.source,values=list(LANGS),state='readonly',width=12).pack(side='left',padx=6)
         ttk.Label(row,text='Model:').pack(side='left');ttk.Entry(row,textvariable=self.model,width=25).pack(side='left',padx=6)
         ttk.Button(row,text='Ažuriranja',command=self.settings).pack(side='right')
+        ttk.Button(row,text='Folio',command=lambda:folio_connect(self)).pack(side='right',padx=6)
+        ttk.Button(row,text='Folio – isključi',command=lambda:folio_disconnect(self)).pack(side='right')
         perf=ttk.Frame(f);perf.pack(fill='x',pady=(10,0))
         cfg=self.runtime.snapshot();self.percent=tk.DoubleVar(value=cfg['percent']);self.device=tk.StringVar(value=cfg['device']);self.intensity_label=tk.StringVar(value=f"{cfg['percent']}%")
         ttk.Label(perf,text='Intenzitet prevoda:').pack(side='left')
@@ -544,4 +580,248 @@ class App(tk.Tk):
         if self.busy and not messagebox.askyesno('Zatvori','Prekidam rad? Red i završeni delovi ostaju sačuvani.'):return
         self.stop.set();self.destroy()
 
-if __name__=='__main__': App().mainloop()
+# Folio uses an outbound connection only; Ollama never listens on the Internet.
+FOLIO_SITE='https://folio-marijo.autokomanda.chatgpt.site'
+
+def folio_tls():
+    import ssl, certifi
+    return ssl.create_default_context(cafile=certifi.where())
+
+def folio_protect(raw, decrypt=False):
+    import ctypes
+    from ctypes import wintypes
+    class Blob(ctypes.Structure):
+        _fields_=[('size',wintypes.DWORD),('data',ctypes.POINTER(ctypes.c_char))]
+    buf=ctypes.create_string_buffer(raw)
+    inp=Blob(len(raw),ctypes.cast(buf,ctypes.POINTER(ctypes.c_char)));out=Blob()
+    fn=ctypes.windll.crypt32.CryptUnprotectData if decrypt else ctypes.windll.crypt32.CryptProtectData
+    if not fn(ctypes.byref(inp),None,None,None,None,1,ctypes.byref(out)):
+        raise OSError('Windows nije mogao da zaštiti Folio pristup.')
+    try:return ctypes.string_at(out.data,out.size)
+    finally:ctypes.windll.kernel32.LocalFree(out.data)
+
+def folio_config():
+    return json.loads(folio_protect((BASE/'folio.dat').read_bytes(),True))
+
+def folio_open(req):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):return None
+    opener=urllib.request.build_opener(urllib.request.HTTPSHandler(context=folio_tls()),NoRedirect())
+    return opener.open(req,timeout=90)
+
+def folio_call(cfg,action,fields=None,files=None,job=None):
+    import uuid
+    headers={'OAI-Sites-Authorization':'Bearer '+cfg['serviceToken'],'X-Folio-Device':cfg['deviceToken']}
+    url=FOLIO_SITE+'/api/computer?action='+action
+    if action=='input':
+        url=FOLIO_SITE+'/api/computer?id='+job['id'];headers['X-Folio-Lease']=job['lease'];body=None
+    elif fields is None:
+        body=b''
+    else:
+        boundary='folio'+uuid.uuid4().hex;chunks=[]
+        for key,value in fields.items():
+            chunks.append(('--'+boundary+'\r\nContent-Disposition: form-data; name="'+key+'"\r\n\r\n'+str(value)+'\r\n').encode())
+        for key,path in (files or {}).items():
+            # A fixed ASCII wire filename avoids header injection from book titles.
+            chunks.append(('--'+boundary+'\r\nContent-Disposition: form-data; name="'+key+'"; filename="'+key+'.epub"\r\nContent-Type: application/epub+zip\r\n\r\n').encode()+Path(path).read_bytes()+b'\r\n')
+        chunks.append(('--'+boundary+'--\r\n').encode());body=b''.join(chunks)
+        headers['Content-Type']='multipart/form-data; boundary='+boundary
+    req=urllib.request.Request(url,data=body,headers=headers,method='GET' if action=='input' else 'POST')
+    try:
+        with folio_open(req) as response:
+            data=response.read(26*1024*1024)
+            if action=='input' and len(data)>25*1024*1024:raise ValueError('Knjiga je veća od 25 MB.')
+            return data if action=='input' else json.loads(data)
+    except urllib.error.HTTPError as e:
+        # Do not log request headers or redirect/login URLs containing credentials.
+        raise RuntimeError('Folio zahtev nije uspeo (HTTP '+str(e.code)+'). Proveri vezu ili ponovo poveži računar.') from None
+
+def folio_download(url,target_dir):
+    import http.client, ipaddress, socket, urllib.parse
+    class PinnedHTTPS(http.client.HTTPSConnection):
+        def connect(self):
+            sock=socket.create_connection((self.public_ip,443),timeout=self.timeout)
+            self.sock=self._context.wrap_socket(sock,server_hostname=self.host)
+    for redirect in range(6):
+        u=urllib.parse.urlsplit(url)
+        if u.scheme!='https' or not u.hostname or u.username or u.password or (u.port and u.port!=443):
+            raise ValueError('Dozvoljeni su samo javni HTTPS linkovi.')
+        addresses=socket.getaddrinfo(u.hostname,443,type=socket.SOCK_STREAM)
+        if not addresses or any(not ipaddress.ip_address(x[4][0]).is_global for x in addresses):
+            raise ValueError('Link ne sme voditi na lokalnu ili privatnu mrežu.')
+        con=PinnedHTTPS(u.hostname,timeout=45,context=folio_tls());con.public_ip=addresses[0][4][0]
+        try:
+            con.request('GET',urllib.parse.urlunsplit(('','',u.path or '/',u.query,'')),headers={'User-Agent':'BookTranslate-Folio/1.4'})
+            response=con.getresponse()
+            if response.status in (301,302,303,307,308):
+                url=urllib.parse.urljoin(url,response.getheader('Location',''));continue
+            if response.status!=200:raise ValueError('Preuzimanje nije uspelo (HTTP '+str(response.status)+'). Dodaj fajl direktno u Folio.')
+            disposition=response.getheader('Content-Disposition','')
+            match=re.search(r'filename="?([^";]+)',disposition)
+            name=match.group(1) if match else urllib.parse.unquote(u.path.split('/')[-1])
+            ext=Path(name).suffix.lower()
+            allowed={'.epub','.pdf','.txt','.mobi','.azw','.azw3','.fb2','.docx','.doc','.djvu','.djv','.rtf','.odt'}
+            ctype=response.getheader('Content-Type','').lower()
+            if ext not in allowed:
+                ext={ 'application/epub+zip':'.epub','application/pdf':'.pdf','text/plain':'.txt'}.get(ctype.split(';')[0],'')
+            if not ext or 'text/html' in ctype:
+                raise ValueError('Ovo je stranica knjige, a ne fajl za preuzimanje. Dodaj direktan link do EPUB/PDF fajla ili pošalji fajl u Folio.')
+            path=Path(target_dir)/('input'+ext);total=0
+            with path.open('wb') as f:
+                while True:
+                    chunk=response.read(65536)
+                    if not chunk:break
+                    total+=len(chunk)
+                    if total>25*1024*1024:raise ValueError('Knjiga je veća od 25 MB.')
+                    f.write(chunk)
+            if not total:raise ValueError('Preuzet je prazan fajl.')
+            return path
+        finally:con.close()
+    raise ValueError('Link ima previše preusmeravanja.')
+
+def folio_document(path):
+    import posixpath, urllib.parse
+    chapters=[];title=Path(path).stem;author=''
+    with zipfile.ZipFile(path) as z:
+        container=parse(z.read('META-INF/container.xml'))
+        opath=container.xpath('string(//*[local-name()="rootfile"]/@full-path)')
+        opf=parse(z.read(opath));title=opf.xpath('string(//*[local-name()="title"])') or title
+        author=opf.xpath('string(//*[local-name()="creator"])')
+        manifest={e.get('id'):e.get('href') for e in opf.iter() if local(e.tag)=='item'}
+        for e in opf.iter():
+            if local(e.tag)!='itemref':continue
+            href=manifest.get(e.get('idref'))
+            if not href:continue
+            name=posixpath.normpath(posixpath.join(posixpath.dirname(opath),urllib.parse.unquote(href.split('#')[0])))
+            root=parse(z.read(name));bits=[]
+            def collect(node):
+                if local(node.tag) in SKIP:return
+                if node.text:bits.append(node.text)
+                for child in node:
+                    collect(child)
+                    if child.tail:bits.append(child.tail)
+                if local(node.tag) in ('p','div','h1','h2','h3','li','br'):bits.append('\n\n')
+            collect(root)
+            text=''.join(bits).strip()
+            if text:
+                heading=root.xpath('string(//*[local-name()="h1" or local-name()="h2" or local-name()="title"][1])')
+                chapters.append({'title':heading.strip() or 'Poglavlje '+str(len(chapters)+1),'text':text})
+    if not chapters:raise ValueError('Knjiga nema čitljiv sadržaj.')
+    return {'title':title,'author':author,'chapters':chapters}
+
+def folio_start_worker():
+    import subprocess,sys
+    if not (BASE/'folio.dat').exists():return
+    python=Path(sys.executable);pythonw=python.with_name('pythonw.exe')
+    if pythonw.exists():python=pythonw
+    subprocess.Popen([str(python),str(Path(__file__).resolve()),'--folio-worker'],creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+
+def folio_connect(parent):
+    import sys
+    path=filedialog.askopenfilename(parent=parent,title='Izaberi Folio-povezivanje.json',filetypes=[('Folio povezivanje','*.json')])
+    if not path:return
+    try:
+        cfg=json.loads(Path(path).read_text(encoding='utf-8'))
+        if cfg.get('site')!=FOLIO_SITE or not all(isinstance(cfg.get(k),str) and len(cfg[k])>=32 for k in ('serviceToken','deviceToken')):
+            raise ValueError('Neispravan fajl. Preuzmi novi kroz Folio → Prevod preko mog računara.')
+        if os.name!='nt':raise ValueError('Automatsko povezivanje je pripremljeno za Windows.')
+        BASE.mkdir(parents=True,exist_ok=True)
+        (BASE/'folio.dat').write_bytes(folio_protect(json.dumps(cfg).encode()))
+        # Same Windows user, no administrator access and no inbound ports.
+        startup=Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/BookTranslate-Folio.cmd'
+        python=Path(sys.executable);pythonw=python.with_name('pythonw.exe')
+        if pythonw.exists():python=pythonw
+        script=Path(__file__).resolve()
+        startup.write_text('@echo off\r\nstart "" "'+str(python)+'" "'+str(script)+'" --folio-worker\r\n',encoding='utf-8')
+        folio_start_worker()
+        messagebox.showinfo('Folio','Računar je povezan. Folio radi u pozadini i posle zatvaranja ovog prozora, kao i posle sledeće prijave u Windows.\n\nRačunar može biti zaključan. Pristup je zaštićen tvojim Windows nalogom.\n\nVezu možeš isključiti dugmetom Folio – isključi.',parent=parent)
+    except Exception as e:messagebox.showerror('Folio',str(e),parent=parent)
+
+def folio_disconnect(parent):
+    (BASE/'folio.dat').unlink(missing_ok=True)
+    if os.environ.get('APPDATA'):
+        (Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/BookTranslate-Folio.cmd').unlink(missing_ok=True)
+    messagebox.showinfo('Folio','Veza je isključena. Tekući prevod će se zaustaviti pri sledećoj proveri.',parent=parent)
+
+def folio_worker():
+    import ctypes
+    if os.name!='nt':return
+    kernel=ctypes.windll.kernel32
+    kernel.CreateMutexW.restype=ctypes.c_void_p
+    mutex=kernel.CreateMutexW(None,False,'Local\\BookTranslateFolioWorker')
+    if kernel.GetLastError()==183:
+        kernel.CloseHandle(ctypes.c_void_p(mutex));return
+    BASE.mkdir(parents=True,exist_ok=True)
+    try:
+        while (BASE/'folio.dat').exists():
+            kernel.SetThreadExecutionState(0x80000001)
+            try:
+                try:
+                    with TranslationGate():
+                        cfg=folio_config();j=folio_call(cfg,'claim').get('job')
+                        if j:folio_process(cfg,j)
+                except BlockingIOError:pass
+                time.sleep(15)
+            except Exception as e:
+                # Exception messages are controlled; credentials are never logged.
+                (BASE/'folio.log').write_text(time.strftime('%Y-%m-%d %H:%M:%S')+' Veza sa Foliom nije uspela. Proveri internet ili ponovi povezivanje.\n',encoding='utf-8')
+                time.sleep(30)
+    finally:
+        kernel.SetThreadExecutionState(0x80000000)
+        kernel.CloseHandle(ctypes.c_void_p(mutex))
+
+def folio_process(cfg,j):
+    import ctypes
+    stop=threading.Event();done=threading.Event();lease_lost=threading.Event();progress=[0]
+    fields=lambda:{'id':j['id'],'lease':j['lease'],'progress':progress[0]}
+    def heartbeat():
+        while not done.wait(25):
+            if not (BASE/'folio.dat').exists():stop.set();return
+            try:folio_call(cfg,'progress',fields())
+            except Exception:lease_lost.set();stop.set();return
+    thread=threading.Thread(target=heartbeat,daemon=True);thread.start();book=None
+    try:
+        work=BASE/'folio-jobs'/j['id'];work.mkdir(parents=True,exist_ok=True)
+        if j.get('url'):path=folio_download(j['url'],work)
+        else:
+            ext=Path(j.get('filename','book.epub')).suffix.lower()
+            if ext not in {'.epub','.pdf','.txt','.mobi','.azw','.azw3','.fb2','.docx','.doc','.djvu','.djv','.rtf','.odt','.html','.htm'}:raise ValueError('Nepodržan format.')
+            path=work/('input'+ext)
+            if not path.exists():
+                data=folio_call(cfg,'input',job=j)
+                temp=path.with_suffix(path.suffix+'.tmp');temp.write_bytes(data);os.replace(temp,path)
+        if stop.is_set():raise Paused()
+        code={'English':'en','French':'fr','German':'de','Latin':'la','Arabic':'ar'}[j['source']]
+        source=(j['source'],code)
+        prepared=prepare_book(str(path),source,stop,lambda *a:None)
+        original_doc=folio_document(prepared)
+        book=Book(prepared,'translategemma:12b',source);book.runtime=RuntimeControl()
+        out=work/'prevod.epub'
+        def notify(n,total,*args):
+            progress[0]=round(n/total*99)
+            if os.name=='nt':ctypes.windll.kernel32.SetThreadExecutionState(0x80000001)
+        book.run(stop,notify,out)
+        if lease_lost.is_set():raise Paused()
+        document=folio_document(out);document['title']+=' — srpski'
+        payload={**fields(),'document':json.dumps(document,ensure_ascii=False)}
+        files={'file':out}
+        if not j.get('originalId'):
+            payload['originalDocument']=json.dumps(original_doc,ensure_ascii=False);files['originalFile']=prepared
+        done.set();thread.join(timeout=95)
+        if lease_lost.is_set():raise Paused()
+        folio_call(cfg,'progress',fields())
+        folio_call(cfg,'finish',payload,files)
+    except Paused:pass
+    except Exception as e:
+        try:folio_call(cfg,'fail',{**fields(),'error':str(e)[:800]})
+        except Exception:pass
+    finally:
+        done.set();thread.join(timeout=2)
+        if book:book.close()
+        if os.name=='nt':ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+
+if __name__=='__main__':
+    import sys
+    if '--folio-worker' in sys.argv:folio_worker()
+    else:App().mainloop()
+
