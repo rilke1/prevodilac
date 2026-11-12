@@ -5,7 +5,7 @@ from lxml import etree as ET
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 CACHE_VERSION = '1.0'
 BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'BookTranslate'
 SKIP = {'script', 'style', 'code', 'pre', 'math', 'svg'}
@@ -434,60 +434,224 @@ class QueueStore:
 
 STATES={'pending':'Čeka','running':'Prevodi se','paused':'Pauzirano','done':'Završeno','error':'Greška'}
 class App(tk.Tk):
+    BG = '#F4F2EB'
+    PAPER = '#FCFBF7'
+    INK = '#202A23'
+    MUTED = '#58665D'
+    LINE = '#DEDCD2'
+    GREEN = '#285443'
+    SOFT = '#E5EDE4'
+    IDLE = 'Dodaj knjige, pa pokreni red. Napredak se čuva i posle zatvaranja aplikacije.'
+
     def __init__(self):
-        super().__init__(); self.title('BookTranslate '+VERSION);self.geometry('1080x840');self.minsize(860,680)
-        folio_start_worker()
+        super().__init__()
+        self.title('BookTranslate '+VERSION)
+        self.geometry('1140x790')
+        self.minsize(900,720)
+        self.configure(background=self.BG)
         self.events=queue.Queue();self.stop=threading.Event();self.busy=False;self.runtime=RuntimeControl()
         try:self.jobs=QueueStore()
         except Exception as e:
             messagebox.showerror('Red nije učitan',f'{e}\nSačuvani red nije prepisan.');self.destroy();raise
-        self.model=tk.StringVar(value='translategemma:12b');self.source=tk.StringVar(value='Engleski');self.folder=tk.StringVar(value=str(Path.home()/'Documents'))
-        self.status=tk.StringVar(value='Dodaj knjige i dokumente (EPUB, MOBI, PDF, DjVu…). Red se čuva i posle zatvaranja aplikacije.')
-        f=ttk.Frame(self,padding=20);f.pack(fill='both',expand=True)
-        ttk.Label(f,text='BookTranslate',font=('Segoe UI',24,'bold')).pack(anchor='w')
-        ttk.Label(f,text='Lokalni prevod knjiga • srpska latinica • red za obradu').pack(anchor='w',pady=(0,14))
+        folio_start_worker()
+        self.model=tk.StringVar(value='translategemma:12b')
+        self.source=tk.StringVar(value='Engleski')
+        self.folder=tk.StringVar(value=str(Path.home()/'Documents'))
+        self.status=tk.StringVar(value=self.IDLE)
+        self.summary=tk.StringVar()
+        self.selection_info=tk.StringVar(value='Izaberi knjigu za detalje.')
+        self.folio_state=tk.StringVar()
+        self.setup_theme()
+        shell=ttk.Frame(self,padding=(24,20,24,16))
+        shell.pack(fill='both',expand=True)
+        header=ttk.Frame(shell)
+        header.pack(fill='x',pady=(0,16))
+        brand=ttk.Frame(header)
+        brand.pack(side='left')
+        ttk.Label(brand,text='BookTranslate',style='Brand.TLabel').pack(anchor='w')
+        ttk.Label(brand,text='Lokalni prevod knjiga na srpski',style='Muted.TLabel').pack(anchor='w',pady=(2,0))
+        ttk.Label(header,text='v'+VERSION,style='Muted.TLabel').pack(side='right',anchor='n',pady=8)
         if os.environ.get('BOOKTRANSLATE_UPDATE_ERROR'):
-            ttk.Label(f,text=os.environ['BOOKTRANSLATE_UPDATE_ERROR'],foreground='#a00000',wraplength=1000).pack(anchor='w',pady=(0,8))
-        row=ttk.Frame(f);row.pack(fill='x')
-        ttk.Label(row,text='Za nove knjige — jezik:').pack(side='left')
-        ttk.Combobox(row,textvariable=self.source,values=list(LANGS),state='readonly',width=12).pack(side='left',padx=6)
-        ttk.Label(row,text='Model:').pack(side='left');ttk.Entry(row,textvariable=self.model,width=25).pack(side='left',padx=6)
-        ttk.Button(row,text='Ažuriranja',command=self.settings).pack(side='right')
-        ttk.Button(row,text='Folio',command=lambda:folio_connect(self)).pack(side='right',padx=6)
-        ttk.Button(row,text='Folio – isključi',command=lambda:folio_disconnect(self)).pack(side='right')
-        perf=ttk.Frame(f);perf.pack(fill='x',pady=(10,0))
-        cfg=self.runtime.snapshot();self.percent=tk.DoubleVar(value=cfg['percent']);self.device=tk.StringVar(value=cfg['device']);self.intensity_label=tk.StringVar(value=f"{cfg['percent']}%")
-        ttk.Label(perf,text='Intenzitet prevoda:').pack(side='left')
-        ttk.Scale(perf,from_=10,to=100,variable=self.percent,command=lambda v:self.intensity_label.set(f'{round(float(v))}%')).pack(side='left',fill='x',expand=True,padx=6)
-        ttk.Label(perf,textvariable=self.intensity_label,width=5).pack(side='left')
-        ttk.Combobox(perf,textvariable=self.device,values=['GPU','CPU'],state='readonly',width=6).pack(side='left',padx=6)
-        ttk.Button(perf,text='Primeni',command=self.apply_performance).pack(side='left')
-        ttk.Button(perf,text='Igranje: CPU',command=self.gaming).pack(side='left',padx=6)
-        ttk.Label(f,text='Procenat određuje rad i pauze između delova; GPU tokom prevoda može dostići 100%. VRAM ostaje zauzet u GPU režimu.',wraplength=1000).pack(anchor='w',pady=(4,0))
-        row=ttk.Frame(f);row.pack(fill='x',pady=10)
-        ttk.Label(row,text='Izlazni folder:').pack(side='left');ttk.Entry(row,textvariable=self.folder).pack(side='left',fill='x',expand=True,padx=6)
-        ttk.Button(row,text='Izaberi folder',command=self.pick_folder).pack(side='left')
-        self.apply_folder=ttk.Button(row,text='Primeni folder na red',command=self.apply_output_folder);self.apply_folder.pack(side='left',padx=6)
-        row=ttk.Frame(f);row.pack(fill='x',pady=(0,10))
-        ttk.Button(row,text='+ Dodaj knjige',command=self.add).pack(side='left')
-        self.start=ttk.Button(row,text='Pokreni / Nastavi red',command=self.go);self.start.pack(side='left',padx=6)
-        self.pause=ttk.Button(row,text='Pauziraj red',command=self.pause_job,state='disabled');self.pause.pack(side='left')
-        self.retry=ttk.Button(row,text='Ponovi izabrane',command=self.retry_selected);self.retry.pack(side='left',padx=6)
-        self.remove=ttk.Button(row,text='Ukloni izabrane',command=self.remove_selected);self.remove.pack(side='left')
-        table=ttk.Frame(f);table.pack(fill='both',expand=True)
-        self.tree=ttk.Treeview(table,columns=('name','state','pct','lang'),show='headings',height=9,selectmode='extended')
-        for c,label,width in [('name','Knjiga',450),('state','Status',130),('pct','Napredak',90),('lang','Izvorni jezik',130)]:
-            self.tree.heading(c,text=label);self.tree.column(c,width=width)
-        scroll=ttk.Scrollbar(table,command=self.tree.yview);self.tree.config(yscrollcommand=scroll.set);scroll.pack(side='right',fill='y');self.tree.pack(fill='both',expand=True)
+            ttk.Label(shell,text=os.environ['BOOKTRANSLATE_UPDATE_ERROR'],foreground='#8C3F30',wraplength=810).pack(anchor='w',pady=(0,8))
+        body=ttk.Frame(shell)
+        body.pack(fill='both',expand=True)
+        body.columnconfigure(0,weight=1)
+        body.rowconfigure(0,weight=1)
+        main=ttk.Frame(body)
+        main.grid(row=0,column=0,sticky='nsew',padx=(0,18))
+        settings=ttk.Frame(body,style='Panel.TFrame',padding=14)
+        settings.grid(row=0,column=1,sticky='ns')
+        settings.columnconfigure(0,minsize=240,weight=1)
+        self.build_queue(main)
+        self.build_settings(settings)
+        self.refresh()
+        self.protocol('WM_DELETE_WINDOW',self.quit_app)
+        self.after(150,self.poll)
+
+    def setup_theme(self):
+        style=ttk.Style(self)
+        style.theme_use('clam')
+        # Keep the OS dialogs and Tk widgets; no fonts or packages need to be installed.
+        from tkinter import font
+        families=set(font.families(self))
+        self.ui_font='Segoe UI' if 'Segoe UI' in families else 'DejaVu Sans'
+        serif='Georgia' if 'Georgia' in families else 'DejaVu Serif'
+        self.option_add('*TCombobox*Listbox.font',(self.ui_font,10))
+        self.option_add('*TCombobox*Listbox.background',self.PAPER)
+        self.option_add('*TCombobox*Listbox.selectBackground',self.GREEN)
+        style.configure('.',font=(self.ui_font,10),background=self.BG,foreground=self.INK)
+        style.configure('TFrame',background=self.BG)
+        style.configure('Panel.TFrame',background=self.PAPER,relief='solid',borderwidth=1,bordercolor=self.LINE)
+        style.configure('Surface.TFrame',background=self.PAPER)
+        style.configure('TLabel',background=self.BG)
+        style.configure('Muted.TLabel',foreground=self.MUTED)
+        style.configure('Brand.TLabel',font=(serif,29,'bold'))
+        style.configure('Title.TLabel',font=(self.ui_font,15,'bold'))
+        style.configure('Panel.TLabel',background=self.PAPER)
+        style.configure('PanelTitle.TLabel',background=self.PAPER,font=(self.ui_font,12,'bold'))
+        style.configure('Hint.TLabel',background=self.PAPER,foreground=self.MUTED,font=(self.ui_font,9))
+        style.configure('TButton',padding=(9,6),background=self.PAPER,foreground=self.INK,
+                        bordercolor=self.LINE,lightcolor=self.PAPER,darkcolor=self.PAPER,relief='flat')
+        style.map('TButton',background=[('disabled','#EDECE5'),('pressed','#DDE7DE'),('active',self.SOFT)],
+                  foreground=[('disabled','#777E75')],bordercolor=[('focus',self.GREEN)])
+        style.configure('Primary.TButton',background=self.GREEN,foreground='#FFFFFF',bordercolor=self.GREEN,
+                        lightcolor=self.GREEN,darkcolor=self.GREEN,font=(self.ui_font,10,'bold'))
+        style.map('Primary.TButton',background=[('disabled','#EDECE5'),('pressed','#193F32'),('active','#346951')],
+                  foreground=[('disabled','#777E75'),('!disabled','#FFFFFF')])
+        style.configure('TEntry',padding=(7,5),fieldbackground='#FFFFFF',bordercolor=self.LINE,insertcolor=self.INK)
+        style.configure('TCombobox',padding=(6,4),fieldbackground='#FFFFFF',bordercolor=self.LINE,arrowcolor=self.GREEN)
+        style.map('TCombobox',fieldbackground=[('readonly','#FFFFFF')],selectbackground=[('readonly','#FFFFFF')],
+                  selectforeground=[('readonly',self.INK)],bordercolor=[('focus',self.GREEN)])
+        style.map('TEntry',bordercolor=[('focus',self.GREEN)])
+        style.configure('Horizontal.TScale',troughcolor=self.SOFT,background=self.GREEN,bordercolor=self.PAPER)
+        style.configure('Horizontal.TProgressbar',troughcolor=self.SOFT,background=self.GREEN,bordercolor=self.SOFT,
+                        lightcolor=self.GREEN,darkcolor=self.GREEN,thickness=7)
+        style.configure('Treeview',background=self.PAPER,fieldbackground=self.PAPER,borderwidth=0,
+                        rowheight=max(30,font.Font(family=self.ui_font,size=10).metrics('linespace')+12))
+        style.configure('Treeview.Heading',background=self.SOFT,foreground=self.INK,relief='flat',
+                        borderwidth=0,padding=(8,8),font=(self.ui_font,9,'bold'))
+        style.map('Treeview',background=[('selected',self.GREEN)],foreground=[('selected','#FFFFFF')])
+        style.map('Treeview.Heading',background=[('active',self.SOFT)])
+        style.configure('Vertical.TScrollbar',background=self.LINE,troughcolor=self.PAPER,bordercolor=self.PAPER,
+                        lightcolor=self.LINE,darkcolor=self.LINE,arrowcolor=self.MUTED)
+        style.configure('TSeparator',background=self.LINE)
+
+    def build_queue(self,main):
+        heading=ttk.Frame(main)
+        heading.pack(fill='x',pady=(0,9))
+        ttk.Label(heading,text='Red za prevod',style='Title.TLabel').pack(anchor='w')
+        ttk.Label(heading,textvariable=self.summary,style='Muted.TLabel').pack(anchor='w',pady=(2,0))
+        controls=ttk.Frame(main)
+        controls.pack(fill='x',pady=(0,9))
+        ttk.Button(controls,text='+ Dodaj knjige',command=self.add,style='Primary.TButton').pack(side='left')
+        self.start=ttk.Button(controls,text='Pokreni red',command=self.go)
+        self.start.pack(side='left',padx=(6,0))
+        self.pause=ttk.Button(controls,text='Pauziraj',command=self.pause_job,state='disabled')
+        self.pause.pack(side='left',padx=(6,0))
+        table=ttk.Frame(main,style='Panel.TFrame')
+        table.pack(fill='both',expand=True)
+        self.tree=ttk.Treeview(table,columns=('name','state','pct','lang'),show='headings',height=7,selectmode='extended')
+        for col,label,width,minimum,align in [
+            ('name','Knjiga',250,130,'w'),('state','Status',100,88,'w'),
+            ('pct','Napredak',74,70,'center'),('lang','Jezik',80,68,'w')
+        ]:
+            self.tree.heading(col,text=label,anchor=align)
+            self.tree.column(col,width=width,minwidth=minimum,anchor=align,stretch=col=='name')
+        self.tree.tag_configure('stripe',background='#F4F4EE')
+        self.tree.tag_configure('done',foreground='#245442')
+        self.tree.tag_configure('error',foreground='#943F31')
+        self.tree.tag_configure('running',foreground='#245442',font=(self.ui_font,10,'bold'))
+        scroll=ttk.Scrollbar(table,command=self.tree.yview)
+        self.tree.config(yscrollcommand=scroll.set)
+        scroll.pack(side='right',fill='y')
+        self.tree.pack(fill='both',expand=True)
+        self.empty=ttk.Label(table,text='Red je prazan. Dodaj EPUB, MOBI, PDF ili drugi dokument.',style='Hint.TLabel',padding=8)
         self.tree.bind('<<TreeviewSelect>>',self.show_selected)
-        self.bar=ttk.Progressbar(f,maximum=100);self.bar.pack(fill='x',pady=(12,6))
-        ttk.Label(f,textvariable=self.status,wraplength=1000).pack(anchor='w')
-        self.preview=tk.Text(f,wrap='word',font=('Segoe UI',10),height=10,state='disabled');self.preview.pack(fill='both',expand=True,pady=10)
-        row=ttk.Frame(f);row.pack(fill='x')
-        ttk.Button(row,text='Otvori izlazni folder',command=self.open_output).pack(side='left')
-        ttk.Button(row,text='Otvori napredak',command=self.open_data).pack(side='left',padx=8)
-        ttk.Label(f,text='Pauza čeka trenutni deo. Knjige se prevode redom; greška jedne knjige ne briše ostale.',wraplength=1000).pack(anchor='w',pady=(10,0))
-        self.refresh();self.protocol('WM_DELETE_WINDOW',self.quit_app);self.after(150,self.poll)
+        actions=ttk.Frame(main)
+        actions.pack(fill='x',pady=(7,0))
+        self.retry=ttk.Button(actions,text='Ponovi izabrane',command=self.retry_selected)
+        self.retry.pack(side='left')
+        self.remove=ttk.Button(actions,text='Ukloni izabrane',command=self.remove_selected)
+        self.remove.pack(side='left',padx=6)
+        ttk.Button(actions,text='Otvori izlaz',command=self.open_output).pack(side='right')
+        details=ttk.Label(main,textvariable=self.selection_info,style='Muted.TLabel',wraplength=520)
+        details.pack(anchor='w',fill='x',pady=(6,0))
+        main.bind('<Configure>',lambda e:details.configure(wraplength=max(100,e.width-12)),add='+')
+        ttk.Separator(main).pack(fill='x',pady=9)
+        ttk.Label(main,text='Pregled prevoda',style='Title.TLabel').pack(anchor='w')
+        self.bar=ttk.Progressbar(main,maximum=100)
+        self.bar.pack(fill='x',pady=(6,4))
+        activity=ttk.Label(main,textvariable=self.status,style='Muted.TLabel',wraplength=520)
+        activity.pack(fill='x',pady=(0,6))
+        main.bind('<Configure>',lambda e:activity.configure(wraplength=max(100,e.width-12)),add='+')
+        preview_box=ttk.Frame(main,style='Panel.TFrame')
+        preview_box.pack(fill='x')
+        self.preview=tk.Text(preview_box,wrap='word',font=(self.ui_font,10),height=6,borderwidth=0,
+                             padx=12,pady=10,highlightthickness=0,background=self.PAPER,
+                             foreground=self.INK,selectbackground=self.GREEN,selectforeground='#FFFFFF',
+                             spacing2=2)
+        self.preview.tag_configure('caption',foreground=self.GREEN,font=(self.ui_font,9,'bold'),spacing3=4)
+        self.preview.tag_configure('muted',foreground=self.MUTED)
+        self.preview.insert('1.0','Ovde se pojavljuju original i prevod dela koji je upravo obrađen.','muted')
+        self.preview.config(state='disabled')
+        self.preview_scroll=ttk.Scrollbar(preview_box,command=self.preview.yview)
+        self.preview.config(yscrollcommand=self.preview_scroll.set)
+        self.preview_scroll.pack(side='right',fill='y')
+        self.preview.pack(side='left',fill='x',expand=True)
+
+    def build_settings(self,panel):
+        def label(text,style='Panel.TLabel',pady=(0,3)):
+            ttk.Label(panel,text=text,style=style,wraplength=236).grid(column=0,sticky='ew',pady=pady)
+        def line():
+            ttk.Separator(panel).grid(column=0,sticky='ew',pady=9)
+        def button_row(*buttons):
+            row=ttk.Frame(panel,style='Surface.TFrame')
+            row.grid(column=0,sticky='ew',pady=(4,0))
+            for i,(text,command) in enumerate(buttons):
+                ttk.Button(row,text=text,command=command).pack(side='left',padx=(0,5 if i<len(buttons)-1 else 0))
+            return row
+        label('Nove knjige','PanelTitle.TLabel')
+        label('Izvorni jezik')
+        ttk.Combobox(panel,textvariable=self.source,values=list(LANGS),state='readonly',width=14).grid(column=0,sticky='ew')
+        label('Model',pady=(7,3))
+        ttk.Entry(panel,textvariable=self.model,width=19).grid(column=0,sticky='ew')
+        line()
+        label('Performanse','PanelTitle.TLabel')
+        cfg=self.runtime.snapshot()
+        self.percent=tk.DoubleVar(value=cfg['percent'])
+        self.device=tk.StringVar(value=cfg['device'])
+        self.intensity_label=tk.StringVar(value=f"{cfg['percent']}%")
+        row=ttk.Frame(panel,style='Surface.TFrame')
+        row.grid(column=0,sticky='ew')
+        ttk.Label(row,text='Intenzitet',style='Panel.TLabel').pack(side='left')
+        ttk.Label(row,textvariable=self.intensity_label,style='Panel.TLabel').pack(side='right')
+        ttk.Scale(panel,from_=10,to=100,variable=self.percent,
+                  command=lambda v:self.intensity_label.set(f'{round(float(v))}%')).grid(column=0,sticky='ew',pady=3)
+        ttk.Combobox(panel,textvariable=self.device,values=['GPU','CPU'],state='readonly',width=6).grid(column=0,sticky='ew')
+        button_row(('Primeni',self.apply_performance),('Igranje: CPU',self.gaming))
+        label('Intenzitet određuje pauze između delova. GPU i dalje može dostići 100%.','Hint.TLabel',pady=(5,0))
+        line()
+        label('Izlazni folder','PanelTitle.TLabel')
+        ttk.Entry(panel,textvariable=self.folder,width=18).grid(column=0,sticky='ew')
+        button_row(('Izaberi',self.pick_folder),('Primeni na red',self.apply_output_folder))
+        line()
+        label('Folio i aplikacija','PanelTitle.TLabel')
+        ttk.Label(panel,textvariable=self.folio_state,style='Hint.TLabel').grid(column=0,sticky='w')
+        button_row(('Poveži Folio',self.connect_folio),('Isključi',self.disconnect_folio))
+        button_row(('Ažuriranja',self.settings),('Fajlovi napretka',self.open_data))
+        self.update_folio_label()
+
+    def update_folio_label(self):
+        self.folio_state.set('Folio je povezan' if (BASE/'folio.dat').is_file() else 'Folio nije povezan')
+
+    def connect_folio(self):
+        folio_connect(self)
+        self.update_folio_label()
+
+    def disconnect_folio(self):
+        folio_disconnect(self)
+        self.update_folio_label()
+
     def apply_performance(self):
         self.runtime.set(round(self.percent.get()),self.device.get())
         self.status.set('Podešavanje sačuvano. Primenjuje se na naredni deo. CPU režim koristi 2 niti i može znatno usporiti prevod.')
@@ -504,14 +668,38 @@ class App(tk.Tk):
         atomic_json(cfgpath,{'repository':repo,'auto_update':bool(repo)})
         messagebox.showinfo('Ažuriranja','Sačuvano. Provera će se izvršiti kada sledeći put pokreneš POKRENI.bat.' if repo else 'Automatska ažuriranja su isključena.')
     def refresh(self):
-        selected=self.tree.selection();rows=self.jobs.snapshot();ids={i['id'] for i in rows}
-        for id in self.tree.get_children():
-            if id not in ids:self.tree.delete(id)
-        for i in rows:
+        selected=self.tree.selection()
+        rows=self.jobs.snapshot()
+        ids={i['id'] for i in rows}
+        for item_id in self.tree.get_children():
+            if item_id not in ids:self.tree.delete(item_id)
+        for n,i in enumerate(rows):
             vals=(Path(i['path']).name,STATES[i['state']],f"{i['progress']:.0f}%",i['source'][0])
-            if self.tree.exists(i['id']):self.tree.item(i['id'],values=vals)
-            else:self.tree.insert('','end',iid=i['id'],values=vals)
-        self.tree.selection_set([id for id in selected if id in ids])
+            tags=('stripe',i['state']) if n%2 else (i['state'],)
+            if self.tree.exists(i['id']):
+                self.tree.item(i['id'],values=vals,tags=tags)
+            else:
+                self.tree.insert('','end',iid=i['id'],values=vals,tags=tags)
+        remaining=tuple(item_id for item_id in selected if item_id in ids)
+        if self.tree.selection()!=remaining:self.tree.selection_set(remaining)
+        counts={state:sum(i['state']==state for i in rows) for state in STATES}
+        self.summary.set(f"{len(rows)} ukupno  ·  {counts['pending']+counts['paused']} na čekanju  ·  {counts['done']} završeno  ·  {counts['error']} grešaka")
+        if rows:self.empty.place_forget()
+        else:self.empty.place(relx=.5,rely=.5,anchor='center')
+        self.update_actions(rows)
+        self.show_selected()
+
+    def update_actions(self,rows=None):
+        if rows is None:rows=self.jobs.snapshot()
+        selected=bool(self.tree.selection()) and not self.busy
+        self.retry.configure(state='normal' if selected else 'disabled')
+        self.remove.configure(state='normal' if selected else 'disabled')
+        pending=any(i['state'] in ('pending','paused') for i in rows)
+        paused=any(i['state']=='paused' for i in rows)
+        self.start.configure(state='normal' if pending and not self.busy else 'disabled',
+                             text='Nastavi red' if paused else 'Pokreni red')
+        self.pause.configure(state='normal' if self.busy and not self.stop.is_set() else 'disabled')
+
     def apply_output_folder(self):
         if self.busy:
             messagebox.showinfo('Izlazni folder','Prvo pauziraj red i sačekaj završetak tekućeg dela.');return
@@ -537,20 +725,28 @@ class App(tk.Tk):
     def remove_selected(self):
         if not self.busy:self.jobs.remove(set(self.tree.selection()));self.refresh()
     def show_selected(self,event=None):
-        for i in self.jobs.snapshot():
-            if i['id'] in self.tree.selection():
-                self.status.set(i['error'] or i['output']);break
+        selection=set(self.tree.selection())
+        rows=self.jobs.snapshot()
+        if event is not None:self.update_actions(rows)
+        if len(selection)>1:
+            self.selection_info.set(f'{len(selection)} izabranih knjiga.')
+            return
+        selected=next((i for i in rows if i['id'] in selection),None)
+        if selected:
+            self.selection_info.set(selected['error'] or str(selected['output']))
+        else:
+            self.selection_info.set('Izaberi knjigu za detalje.')
     def open_output(self):
         selected=[i for i in self.jobs.snapshot() if i['id'] in self.tree.selection()]
         p=Path(selected[0]['output']).parent if selected else Path(self.folder.get())
         if p.is_dir():os.startfile(str(p))
     def open_data(self):BASE.mkdir(parents=True,exist_ok=True);os.startfile(str(BASE))
-    def pause_job(self):self.stop.set();self.status.set('Pauziram red posle tekućeg dela…')
+    def pause_job(self):self.stop.set();self.update_actions();self.status.set('Pauziram red posle tekućeg dela…')
     def go(self):
         if self.busy:return
         if not any(i['state'] in ('pending','paused') for i in self.jobs.snapshot()):
             self.status.set('Nema knjiga na čekanju. Za knjige sa greškom izaberi Ponovi izabrane.');return
-        self.busy=True;self.stop.clear();self.start.config(state='disabled');self.pause.config(state='normal');self.retry.config(state='disabled');self.remove.config(state='disabled')
+        self.busy=True;self.stop.clear();self.update_actions()
         def work():
             try:self.jobs.run(self.stop,lambda kind,data:self.events.put((kind,data)),runtime=self.runtime)
             except Exception as e:self.events.put(('fatal',str(e)));self.events.put(('finished',None))
@@ -565,7 +761,7 @@ class App(tk.Tk):
             elif kind=='refresh':refresh=True
             elif kind=='fatal':messagebox.showerror('Red je zaustavljen',data)
             elif kind=='finished':
-                latest=None;refresh=True;self.busy=False;self.start.config(state='normal');self.pause.config(state='disabled');self.retry.config(state='normal');self.remove.config(state='normal')
+                latest=None;refresh=True;self.busy=False
                 rows=self.jobs.snapshot();errors=sum(i['state']=='error' for i in rows);done=sum(i['state']=='done' for i in rows)
                 self.status.set(f'{"Red je pauziran" if self.stop.is_set() else "Obrada reda je završena"}. Završeno: {done}; greške: {errors}. Klikni knjigu za detalje.')
         if latest:
@@ -573,7 +769,14 @@ class App(tk.Tk):
             # Progress writes are throttled to UI polling rather than every text fragment.
             self.jobs.update(id,progress=pct);refresh=True
             self.status.set(f'{done:,} / {total:,} delova • {pct:.1f}% • {name}')
-            self.preview.config(state='normal');self.preview.delete('1.0','end');self.preview.insert('end','ORIGINAL\n'+original+'\n\nPREVOD\n'+translated);self.preview.config(state='disabled')
+            self.preview.config(state='normal')
+            self.preview.delete('1.0','end')
+            self.preview.insert('end','Original\n','caption')
+            self.preview.insert('end',original+'\n\n')
+            self.preview.insert('end','Prevod\n','caption')
+            self.preview.insert('end',translated)
+            self.preview.config(state='disabled')
+            self.preview.yview_moveto(0)
         if refresh:self.refresh()
         self.after(150,self.poll)
     def quit_app(self):
